@@ -1,0 +1,13 @@
+glip.zztt.org {
+    reverse_proxy /api/* 127.0.0.1:8000
+    
+    handle_path /audio/* {
+        root * /opt/glip/data/audio
+        file_server
+    }
+
+    handle_path /pb/* {
+        reverse_proxy 127.0.0.1:8090
+    }
+    reverse_proxy localhost:3001
+}

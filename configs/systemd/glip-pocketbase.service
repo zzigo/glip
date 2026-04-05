@@ -1,0 +1,13 @@
+[Unit]
+Description=GLIP PocketBase
+After=network.target
+
+[Service]
+User=zz
+Group=zz
+WorkingDirectory=/opt/glip/services/pocketbase
+ExecStart=/opt/glip/services/pocketbase/pocketbase serve --http=127.0.0.1:8090
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

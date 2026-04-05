@@ -1,0 +1,64 @@
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+bun.lock
+package-lock.json
+yarn.lock
+Cargo.lock
+
+# Build outputs
+dist/
+build/
+target/
+.svelte-kit/
+.vercel/
+.output/
+
+# Rust
+apps/api/target/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+*/venv/
+*/.venv/
+
+# Data & Services
+data/audio/*
+!data/audio/.gitkeep
+data/embeddings/*
+!data/embeddings/.gitkeep
+data/symbols/*
+!data/symbols/.gitkeep
+data/video/*
+!data/video/.gitkeep
+data/yaml/*
+!data/yaml/.gitkeep
+
+services/pocketbase/pocketbase
+services/pocketbase/pb_data/
+services/pocketbase/*.zip
+services/qdrant_storage/
+
+# Logs
+logs/*.log
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example

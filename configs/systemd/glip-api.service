@@ -1,0 +1,13 @@
+[Unit]
+Description=GLIP API
+After=network.target
+
+[Service]
+User=zz
+Group=zz
+WorkingDirectory=/opt/glip/apps/api
+ExecStart=/opt/glip/apps/api/target/release/api
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
