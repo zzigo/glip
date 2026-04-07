@@ -1,6 +1,8 @@
 export class AudioEngine {
     private ctx: AudioContext | null = null;
     private bufferCache: Map<string, AudioBuffer> = new Map();
+    private proximitySources: Map<string, { source: AudioBufferSourceNode, gainNode: GainNode }> = new Map();
+    private currentTaeSource: AudioBufferSourceNode | null = null;
 
     constructor() {}
 
@@ -29,6 +31,7 @@ export class AudioEngine {
     }
 
     async playTae(audioFile: string, time: number = 0, duration: number | null = null, reverse: boolean = false) {
+        this.stopTae();
         const ctx = this.initContext();
         const url = `/audio/${audioFile}`;
         
@@ -55,8 +58,18 @@ export class AudioEngine {
             if (duration) {
                 source.stop(ctx.currentTime + time + duration);
             }
+            this.currentTaeSource = source;
         } catch (e) {
             console.error("AudioEngine playback failed", e);
+        }
+    }
+
+    stopTae() {
+        if (this.currentTaeSource) {
+            try {
+                this.currentTaeSource.stop();
+            } catch (e) {}
+            this.currentTaeSource = null;
         }
     }
 
@@ -99,8 +112,6 @@ export class AudioEngine {
         }
     }
 
-    private proximitySources: Map<string, { source: AudioBufferSourceNode, gainNode: GainNode }> = new Map();
-
     async updateProximity(sounds: { id: string, audio: string, gain: number }[]) {
         const ctx = this.initContext();
         const activeIds = new Set(sounds.map(s => s.id));
@@ -109,8 +120,8 @@ export class AudioEngine {
         for (const [id, data] of this.proximitySources.entries()) {
             if (!activeIds.has(id)) {
                 try {
-                    data.gainNode.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
-                    data.source.stop(ctx.currentTime + 0.1);
+                    data.gainNode.gain.value = 0;
+                    data.source.stop();
                 } catch(e) {}
                 this.proximitySources.delete(id);
             }

@@ -8,6 +8,10 @@ pub struct AnalysisData {
     pub harmonic: Vec<f32>,
     pub percussive: Vec<f32>,
     pub centroid: Vec<f32>,
+    pub rms: Vec<f32>,
+    pub f0: Vec<f32>,
+    pub zcr: Vec<f32>,
+    pub flatness: Vec<f32>,
     pub spectrogram: Vec<Vec<f32>>,
 }
 
@@ -26,11 +30,17 @@ import sys
 y, sr = librosa.load('{}', duration=30)
 y_h, y_p = librosa.effects.hpss(y)
 cent = librosa.feature.spectral_centroid(y=y, sr=sr)
+rms = librosa.feature.rms(y=y)
+f0, voiced_flag, voiced_probs = librosa.pyin(y, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'))
+zcr = librosa.feature.zero_crossing_rate(y)
+flatness = librosa.feature.spectral_flatness(y=y)
 S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=64)
 S_db = librosa.power_to_db(S, ref=np.max)
 
 def downsample(data, target=500):
     if len(data.shape) > 1: data = data[0]
+    # Handle NaNs in f0
+    data = np.nan_to_num(data)
     if len(data) <= target: return data.tolist()
     return [float(x) for x in data[::len(data)//target]]
 
@@ -39,6 +49,10 @@ result = {{
     "harmonic": downsample(y_h),
     "percussive": downsample(y_p),
     "centroid": downsample(cent),
+    "rms": downsample(rms),
+    "f0": downsample(f0),
+    "zcr": downsample(zcr),
+    "flatness": downsample(flatness),
     "spectrogram": S_db.tolist()
 }}
 print(json.dumps(result))

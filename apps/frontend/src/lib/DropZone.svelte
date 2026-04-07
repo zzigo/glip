@@ -39,6 +39,8 @@
 <div 
 	class="dropzone" 
 	class:dragging 
+	role="region"
+	aria-label="Audio drop zone"
 	ondragover={(e) => { e.preventDefault(); dragging = true; }}
 	ondragleave={() => dragging = false}
 	ondrop={handleDrop}

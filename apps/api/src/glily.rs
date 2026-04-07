@@ -55,14 +55,14 @@ pub fn parse_to_symbol(glily_str: &str, descriptors: Option<&Value>) -> GlilyRes
                 let py = cy + r * angle.sin();
                 points.push_str(&format!("{},{} ", px, py));
             }
-            svg = format!(r#"<svg viewBox="0 0 {} {}" xmlns="http://www.w3.org/2000/svg">
+            svg = format!(r##"<svg viewBox="0 0 {} {}" xmlns="http://www.w3.org/2000/svg">
                 <polygon points="{}" fill="none" stroke="#00ff88" stroke-width="2"/>
-            </svg>"#, w, h, points);
+            </svg>"##, w, h, points);
         } else {
             // Smooth (Bouba)
-            svg = format!(r#"<svg viewBox="0 0 {} {}" xmlns="http://www.w3.org/2000/svg">
+            svg = format!(r##"<svg viewBox="0 0 {} {}" xmlns="http://www.w3.org/2000/svg">
                 <ellipse cx="{}" cy="{}" rx="{}" ry="{}" fill="none" stroke="#00ff88" stroke-width="2"/>
-            </svg>"#, w, h, cx, cy, size * stretch.min(2.0), size);
+            </svg>"##, w, h, cx, cy, size * stretch.min(2.0), size);
         }
     }
 

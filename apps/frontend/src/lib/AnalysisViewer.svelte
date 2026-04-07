@@ -41,19 +41,19 @@
 			{#if activeTab === 'hpss'}
 				<div class="viz hpss-viz">
 					<div class="layer harmonic">
-						<label>HARMONIC (HPSS)</label>
+						<span class="label">HARMONIC (HPSS)</span>
 						<svg viewBox="0 0 500 100" preserveAspectRatio="none">
 							<path d="M {getPath(data.harmonic, 100)}" stroke="#00ffff" fill="none" stroke-width="1.5"/>
 						</svg>
 					</div>
 					<div class="layer percussive">
-						<label>PERCUSSIVE (HPSS)</label>
+						<span class="label">PERCUSSIVE (HPSS)</span>
 						<svg viewBox="0 0 500 100" preserveAspectRatio="none">
 							<path d="M {getPath(data.percussive, 100)}" stroke="#ff00ff" fill="none" stroke-width="1.5"/>
 						</svg>
 					</div>
 					<div class="layer centroid">
-						<label>SPECTRAL CENTROID</label>
+						<span class="label">SPECTRAL CENTROID</span>
 						<svg viewBox="0 0 500 100" preserveAspectRatio="none">
 							<path d="M {getPath(data.centroid, 100, 0.8)}" stroke="#ffff00" fill="none" stroke-width="2"/>
 						</svg>
@@ -130,7 +130,7 @@
 		position: relative;
 	}
 
-	.layer label {
+	.label {
 		position: absolute;
 		top: 2px;
 		left: 5px;

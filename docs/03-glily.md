@@ -372,17 +372,22 @@ Eso es exactamente lo que faltaba en:
 
 ⸻
 
-10. Punto crítico
-
-Si GLINO = acción
-y GLILY = inscripción
-
-entonces:
-
-TAE = unidad transductiva entre sonido y símbolo
-
 ⸻
 
-Si quieres, siguiente paso:
-	•	gramática formal GLILY (BNF)
-	•	o implementación mínima parser + output LilyPond real (muy recomendable para validar rápido)
+11. Implementación Actual (2026-04-07)
+
+Se ha implementado el primer generador funcional de glyphs en `apps/glily/parser.ts`.
+
+Características del sistema:
+- **Parser dinámico**: Interpreta notación GLILY modular (ej: `cl.m { notes vector }`).
+- **Independencia de fuente**: Usa `RobotoMono.ttf` integrada para generar `<path>` SVG deterministas.
+- **Gráficos vectoriales**: Representa visualmente estados de activación (`0`, `1`) y ruidos (`x`) calculando espaciado proporcional en el viewBox.
+- **Estética**: Caja neón `#00ff88` con fondo `#121212`, optimizada para visores de alta densidad (Retina) y paneles de frontend.
+
+Uso técnico:
+```bash
+cd apps/glily
+npx ts-node parser.ts "cl.m { e'c''fis''' 0 0 0 x 0 0 1 }"
+```
+Genera un archivo SVG en `apps/glily/output/` con los paths ya renderizados.
+

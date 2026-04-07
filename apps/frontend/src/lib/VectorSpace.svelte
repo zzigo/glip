@@ -123,7 +123,7 @@
 			}
 		});
 
-		if (isMouseIn) {
+		if (isMouseIn && proximitySounds.length > 0) {
 			audioEngine.updateProximity(proximitySounds);
 		} else {
 			audioEngine.stopAllProximity();
@@ -195,7 +195,7 @@
 				closest = p;
 			}
 		});
-		if (closest) onSelect(closest.id);
+		if (closest) onSelect(closest.id, false);
 	}
 
 	$effect(() => {
@@ -207,36 +207,51 @@
 			width = canvas.parentElement?.clientWidth || 400;
 			height = canvas.parentElement?.clientHeight || 400;
 		};
+		const handleBlur = () => {
+			isMouseIn = false;
+			audioEngine.stopAllProximity();
+			draw();
+		};
 		window.addEventListener('resize', resize);
+		window.addEventListener('blur', handleBlur);
 		resize();
-		return () => window.removeEventListener('resize', resize);
+		return () => {
+			window.removeEventListener('resize', resize);
+			window.removeEventListener('blur', handleBlur);
+		};
 	});
 </script>
 
 <div class="vector-container">
 	<div class="top-controls">
 		<div class="axis-control y-axis">
-			<label>Y:</label>
-			<select bind:value={yAxis}>
-				{#each availableDescriptors() as desc}
-					<option value={desc}>{desc}</option>
-				{/each}
-			</select>
+			<label>
+				Y:
+				<select bind:value={yAxis}>
+					{#each availableDescriptors() as desc}
+						<option value={desc}>{desc}</option>
+					{/each}
+				</select>
+			</label>
 		</div>
 
 		<div class="proximity-control">
-			<label>RADIUS:</label>
-			<input type="number" bind:value={playRadius} step="5" min="5" max="200" />
+			<label>
+				RADIUS:
+				<input type="number" bind:value={playRadius} step="5" min="5" max="200" />
+			</label>
 		</div>
 	</div>
 	
 	<div class="axis-control x-axis">
-		<label>X:</label>
-		<select bind:value={xAxis}>
-			{#each availableDescriptors() as desc}
-				<option value={desc}>{desc}</option>
-			{/each}
-		</select>
+		<label>
+			X:
+			<select bind:value={xAxis}>
+				{#each availableDescriptors() as desc}
+					<option value={desc}>{desc}</option>
+				{/each}
+			</select>
+		</label>
 	</div>
 
 	<canvas 
