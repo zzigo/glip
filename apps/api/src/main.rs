@@ -1,180 +1,363 @@
 // /opt/glip/apps/api/src/main.rs
 
+mod glino;
+mod glily;
+mod ops;
+mod analysis;
+
 use axum::{
     extract::{Multipart, Query},
-    routing::{get, post},
+    routing::{get, post, patch},
     Json, Router,
+    response::{IntoResponse, Response},
+    body::Body,
 };
+use http::{header, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::process::Command;
 use std::path::PathBuf;
+use std::fs;
 
 use reqwest::Client;
 use tower_http::cors::CorsLayer;
 
-// --------------------------------------------------
-// TYPES
-// --------------------------------------------------
+use crate::ops::{TAE, TimelineEvent, generate_timeline};
 
-#[derive(Debug, Deserialize)]
-struct NearParams {
-    q: Option<String>,      // GLINO string (future)
-    vector: Option<String>, // comma-separated floats
-    k: Option<usize>,
-}
-
-#[derive(Debug, Serialize)]
-struct TAE {
-    id: String,
-    score: f32,
+#[derive(Deserialize)]
+struct AnalysisParams {
     audio: String,
 }
 
-#[derive(Debug, Serialize)]
-struct TimelineEvent {
-    tae_id: String,
-    start: f32,
-    duration: f32,
-    gain: f32,
+#[derive(Serialize)]
+struct PointEntry {
+    id: String,
+    audio: String,
+    symbol: String,
+    vector: Vec<f32>,
+    descriptors: serde_json::Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Deserialize)]
+struct UpdateMetaParams {
+    id: String,
+    metadata: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct NearParams {
+    q: Option<String>,
+    k: Option<usize>,
+    vector: Option<String>,
+}
+
+#[derive(Serialize)]
 struct NearResponse {
     results: Vec<TAE>,
     timeline: Vec<TimelineEvent>,
+    query_parsed: crate::glino::GlinoQuery,
 }
 
-// --------------------------------------------------
-// MAIN
-// --------------------------------------------------
+async fn dump_handler() -> impl IntoResponse {
+    let client = Client::new();
+    let res = client
+        .get("http://127.0.0.1:8090/api/collections/tae/records?perPage=500")
+        .send()
+        .await;
 
-#[tokio::main]
-async fn main() {
-    let cors = CorsLayer::permissive();
+    let mut count = 0;
+    let obsidian_path = PathBuf::from("/opt/glip/data/obsidian");
+    let _ = fs::create_dir_all(&obsidian_path);
 
-    let app = Router::new()
-        .route("/api/near", get(near_handler))
-        .route("/api/ingest", post(ingest_handler))
-        .layer(cors);
+    if let Ok(resp) = res {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(items) = json["items"].as_array() {
+                for item in items {
+                    let id = item["id"].as_str().unwrap_or("unknown");
+                    let file_name = format!("{}.md", id);
+                    let full_path = obsidian_path.join(file_name);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
-    println!("GLIP API running on http://{}", addr);
+                    let mut flat_data = serde_json::Map::new();
+                    let mut librosa_analysis = serde_json::Map::new();
+                    
+                    if let Some(obj) = item.as_object() {
+                        for (k, v) in obj {
+                            if !["collectionId", "collectionName", "metadata", "descriptors", "embedding"].contains(&k.as_str()) {
+                                flat_data.insert(k.clone(), v.clone());
+                            }
+                        }
+                        
+                        // Extract descriptors for librosa sub-section
+                        if let Some(desc) = item.get("descriptors") {
+                            if let Some(d_obj) = desc.as_object() {
+                                for key in ["desc_centroid", "desc_rms", "desc_f0", "desc_zcr", "desc_flatness"] {
+                                    if let Some(val) = d_obj.get(key) {
+                                        librosa_analysis.insert(key.replace("desc_", ""), val.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    flat_data.insert("librosa_analysis".to_string(), serde_json::Value::Object(librosa_analysis.clone()));
+                    
+                    let descriptors = item.get("descriptors");
+                    let glily_str = item["glily"].as_str().unwrap_or("");
+                    let symbol_res = glily::parse_to_symbol(glily_str, descriptors);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-}
+                    let yaml_str = serde_yaml::to_string(&flat_data).unwrap_or_default();
+                    
+                    // Construct Markdown with folded section
+                    let mut body_content = format!("# TAE: {}\n\n## Glyph\n\n{}\n\n", id, symbol_res.svg);
+                    
+                    body_content.push_str("<details>\n<summary>Librosa Analysis</summary>\n");
+                    body_content.push_str("<div style=\"background: #161e1a; padding: 10px; border: 1px solid #2a3a2a; border-radius: 4px; margin-top: 10px;\">\n\n");
+                    for (k, v) in &librosa_analysis {
+                        let val_fmt = if v.is_f64() { format!("{:.3}", v.as_f64().unwrap()) } else { v.to_string() };
+                        body_content.push_str(&format!("- **{}**: {}\n", k, val_fmt));
+                    }
+                    body_content.push_str("\n</div>\n</details>\n\n");
+                    body_content.push_str("Generated by GLIP.");
 
-// --------------------------------------------------
-// HANDLERS
-// --------------------------------------------------
+                    let content = format!("---\n{}---\n\n{}", yaml_str, body_content);
 
-async fn ingest_handler(mut multipart: Multipart) -> Json<serde_json::Value> {
-    let mut files_processed = 0;
-
-    while let Some(field) = multipart.next_field().await.unwrap() {
-        let name = field.name().unwrap().to_string();
-        let file_name = field.file_name().unwrap_or("unknown.wav").to_string();
-        
-        if name == "files" {
-            let data = field.bytes().await.unwrap();
-            let path = PathBuf::from("/opt/glip/data/audio").join(&file_name);
-            
-            // Save file
-            tokio::fs::write(&path, data).await.unwrap();
-            println!("Saved file: {:?}", path);
-
-            // Trigger ingest script
-            let output = Command::new("/opt/glip/apps/indexer/venv/bin/python3")
-                .arg("/opt/glip/scripts/ingest.py")
-                .arg(&path)
-                .output();
-
-            match output {
-                Ok(o) => {
-                    println!("Ingest script output: {:?}", String::from_utf8_lossy(&o.stdout));
-                    files_processed += 1;
-                }
-                Err(e) => {
-                    eprintln!("Failed to execute ingest script: {:?}", e);
+                    if fs::write(full_path, content).is_ok() {
+                        count += 1;
+                    }
                 }
             }
         }
     }
 
-    Json(serde_json::json!({ "status": "ok", "processed": files_processed }))
+    // Create ZIP
+    let zip_path = "/tmp/glip_obsidian_dump.zip";
+    let _ = Command::new("sh")
+        .arg("-c")
+        .arg(format!("cd /opt/glip/data/obsidian && zip -r {} .", zip_path))
+        .output();
+
+    if let Ok(zip_data) = fs::read(zip_path) {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/zip")
+            .header(header::CONTENT_DISPOSITION, "attachment; filename=\"glip_dump.zip\"")
+            .header("X-Dump-Count", count.to_string())
+            .body(Body::from(zip_data))
+            .unwrap();
+        response
+    } else {
+        Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::from("Failed to create ZIP"))
+            .unwrap()
+    }
 }
 
-async fn near_handler(Query(params): Query<NearParams>) -> Json<NearResponse> {
-    let k = params.k.unwrap_or(10);
+async fn sync_handler() -> Json<serde_json::Value> {
+    let obsidian_path = PathBuf::from("/opt/glip/data/obsidian");
+    if !obsidian_path.exists() {
+        return Json(serde_json::json!({ "error": "Obsidian path not found" }));
+    }
 
-    // --------------------------------------------
-    // VECTOR INPUT (fallback random)
-    // --------------------------------------------
-
-    let vector: Vec<f32> = if let Some(v) = params.vector {
-        v.split(',')
-            .filter_map(|x| x.parse::<f32>().ok())
-            .collect()
-    } else {
-        // fallback dummy vector
-        vec![0.1; 512]
-    };
-
-    // --------------------------------------------
-    // QUERY QDRANT
-    // --------------------------------------------
-
+    let mut count = 0;
     let client = Client::new();
 
+    if let Ok(entries) = fs::read_dir(obsidian_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    let parts: Vec<&str> = content.split("---").collect();
+                    if parts.len() >= 3 {
+                        let yaml_part = parts[1];
+                        if let Ok(metadata) = serde_yaml::from_str::<serde_json::Value>(yaml_part) {
+                            if let Some(id) = metadata["id"].as_str() {
+                                // For SYNC back to PocketBase, we send the whole flat object
+                                // PB will ignore fields that don't match the schema or we can wrap them back
+                                let _ = client
+                                    .patch(format!("http://127.0.0.1:8090/api/collections/tae/records/{}", id))
+                                    .json(&serde_json::json!({
+                                        "audio": metadata["audio"],
+                                        "glino": metadata["glino"],
+                                        "glily": metadata["glily"],
+                                        "metadata": metadata // Store everything in metadata column
+                                    }))
+                                    .send()
+                                    .await;
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({ "status": "ok", "synced": count }))
+}
+
+async fn analysis_handler(Query(params): Query<AnalysisParams>) -> Json<serde_json::Value> {
+    if let Some(data) = analysis::get_analysis(&params.audio) {
+        Json(serde_json::to_value(data).unwrap())
+    } else {
+        Json(serde_json::json!({ "error": "Analysis failed" }))
+    }
+}
+
+async fn points_handler() -> Json<Vec<PointEntry>> {
+    let client = Client::new();
+    let mut points_out = Vec::new();
+
     let res = client
-        .post("http://127.0.0.1:6333/collections/tae/points/search")
+        .post("http://127.0.0.1:6333/collections/tae/points/scroll")
         .json(&serde_json::json!({
-            "vector": vector,
-            "limit": k,
-            "with_payload": true
+            "limit": 500,
+            "with_payload": true,
+            "with_vector": true
         }))
         .send()
         .await;
 
-    let mut results: Vec<TAE> = Vec::new();
-
     if let Ok(resp) = res {
         if let Ok(json) = resp.json::<serde_json::Value>().await {
-            if let Some(points) = json["result"].as_array() {
+            if let Some(points) = json["result"]["points"].as_array() {
                 for p in points {
-                    let id = p["id"].to_string();
-                    let score = p["score"].as_f64().unwrap_or(0.0) as f32;
+                    let id = p["payload"]["tae_id"].as_str().unwrap_or("unknown").to_string();
                     let audio = p["payload"]["file_name"].as_str().unwrap_or("unknown.wav").to_string();
+                    let vector = p["vector"].as_array()
+                        .map(|v| v.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect())
+                        .unwrap_or_else(Vec::new);
+                    
+                    // In Qdrant we store the flat metadata under 'descriptors'
+                    let descriptors = p["payload"]["descriptors"].clone();
+                    
+                    // Generate symbol for point
+                    let symbol_res = glily::parse_to_symbol("", Some(&descriptors));
 
-                    results.push(TAE { id, score, audio });
+                    points_out.push(PointEntry { 
+                        id, 
+                        audio, 
+                        symbol: symbol_res.svg,
+                        vector, 
+                        descriptors 
+                    });
+                }
+            }
+        }
+    }
+    Json(points_out)
+}
+
+async fn update_metadata_handler(Json(payload): Json<UpdateMetaParams>) -> Json<serde_json::Value> {
+    let client = Client::new();
+    let _ = client
+        .patch(format!("http://127.0.0.1:8090/api/collections/tae/records/{}", payload.id))
+        .json(&payload.metadata)
+        .send()
+        .await;
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+async fn ingest_handler(mut multipart: axum::extract::Multipart) -> Json<serde_json::Value> {
+    let mut files_processed = 0;
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = field.name().unwrap().to_string();
+        let file_name = field.file_name().unwrap_or("unknown.wav").to_string();
+        if name == "files" {
+            let data = field.bytes().await.unwrap();
+            let path = PathBuf::from("/opt/glip/data/audio").join(&file_name);
+            tokio::fs::write(&path, data).await.unwrap();
+            let _ = Command::new("/opt/glip/apps/indexer/venv/bin/python3")
+                .arg("/opt/glip/scripts/ingest.py")
+                .arg(&path)
+                .output();
+            files_processed += 1;
+        }
+    }
+    Json(serde_json::json!({ "status": "ok", "processed": files_processed }))
+}
+
+async fn near_handler(Query(params): Query<NearParams>) -> Json<NearResponse> {
+    let q_str = params.q.unwrap_or_else(|| "glip:*".to_string());
+    let glino_query = glino::parse_query(&q_str);
+    let client = Client::new();
+    let mut results: Vec<TAE> = Vec::new();
+
+    let default_glily = if q_str.contains("cl.m") { "cl.m" } else { "" };
+
+    if glino_query.is_list {
+        let res = client
+            .post("http://127.0.0.1:6333/collections/tae/points/scroll")
+            .json(&serde_json::json!({ "limit": 100, "with_payload": true }))
+            .send().await;
+
+        if let Ok(resp) = res {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(points) = json["result"]["points"].as_array() {
+                    for p in points {
+                        let id = p["payload"]["tae_id"].as_str().unwrap_or("unknown").to_string();
+                        let audio = p["payload"]["file_name"].as_str().unwrap_or("unknown.wav").to_string();
+                        let descriptors = p["payload"]["descriptors"].clone();
+                        let symbol_res = glily::parse_to_symbol(default_glily, Some(&descriptors));
+                        results.push(TAE { id, score: 1.0, audio, symbol: symbol_res.svg });
+                    }
+                }
+            }
+        }
+    } else {
+        let k = params.k.unwrap_or(glino_query.struct_sequence.unwrap_or(10));
+        let vector = params.vector.map(|v| v.split(',').filter_map(|x| x.parse::<f32>().ok()).collect()).unwrap_or(vec![0.1; 512]);
+        let mut search_body = serde_json::json!({ "vector": vector, "limit": k, "with_payload": true });
+        
+        // Dynamic Filter construction
+        let mut filter_must = Vec::new();
+        if let Some(source) = &glino_query.source {
+            if source != "*" {
+                filter_must.push(serde_json::json!({ "key": "file_name", "match": { "text": source } }));
+            }
+        }
+        if let Some(desc) = &glino_query.filter_descriptor {
+             filter_must.push(serde_json::json!({ "key": "descriptor", "match": { "text": desc } }));
+        }
+        if !filter_must.is_empty() {
+            search_body["filter"] = serde_json::json!({ "must": filter_must });
+        }
+
+        let res = client.post("http://127.0.0.1:6333/collections/tae/points/search").json(&search_body).send().await;
+        if let Ok(resp) = res {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(points) = json["result"].as_array() {
+                    for p in points {
+                        let id = p["payload"]["tae_id"].as_str().unwrap_or("unknown").to_string();
+                        let score = p["score"].as_f64().unwrap_or(0.0) as f32;
+                        let audio = p["payload"]["file_name"].as_str().unwrap_or("unknown.wav").to_string();
+                        let descriptors = p["payload"]["descriptors"].clone();
+                        let symbol_res = glily::parse_to_symbol(default_glily, Some(&descriptors));
+                        results.push(TAE { id, score, audio, symbol: symbol_res.svg });
+                    }
                 }
             }
         }
     }
 
-    // --------------------------------------------
-    // TIMELINE GENERATION (VERY BASIC)
-    // --------------------------------------------
+    let timeline = generate_timeline(results.clone(), &glino_query);
+    Json(NearResponse { results, timeline, query_parsed: glino_query })
+}
 
-    let mut timeline: Vec<TimelineEvent> = Vec::new();
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/api/dump", get(dump_handler))
+        .route("/api/sync", post(sync_handler))
+        .route("/api/analysis", get(analysis_handler))
+        .route("/api/points", get(points_handler))
+        .route("/api/update_metadata", patch(update_metadata_handler))
+        .route("/api/ingest", post(ingest_handler))
+        .route("/api/near", get(near_handler))
+        .layer(CorsLayer::permissive());
 
-    let mut time = 0.0;
-
-    for r in &results {
-        timeline.push(TimelineEvent {
-            tae_id: r.id.clone(),
-            start: time,
-            duration: 0.3,
-            gain: 0.8,
-        });
-
-        time += 0.25; // overlap
-    }
-
-    // --------------------------------------------
-    // RESPONSE
-    // --------------------------------------------
-
-    Json(NearResponse { results, timeline })
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+    println!("GLIP API running on http://{}", addr);
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }

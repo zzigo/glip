@@ -56,7 +56,7 @@
 	.dropzone {
 		width: 100%;
 		height: 80px;
-		border: 1px dashed var(--border);
+		border: 1px dashed #555;
 		background: #050505;
 		display: flex;
 		justify-content: center;
@@ -64,13 +64,20 @@
 		cursor: pointer;
 		transition: all 0.2s;
 		font-size: 10px;
-		color: var(--text-dim);
+		color: #888;
+		margin-top: 10px;
+	}
+
+	.dropzone:hover {
+		border-color: #777;
+		background: #080808;
 	}
 
 	.dropzone.dragging {
 		border-color: var(--accent);
 		background: #0a1510;
 		color: var(--accent);
+		border-style: solid;
 	}
 
 	.status {

@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TAE Flat Metadata Schema",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "type": { "type": "string" },
+    "instrument": { "type": "string" },
+    "performer": { "type": "string" },
+    "date": { "type": "string" },
+    
+    "audio_file": { "type": "string" },
+    "audio_duration": { "type": "number" },
+    "audio_sr": { "type": "integer" },
+    "audio_channels": { "type": "integer" },
+    
+    "segment_start": { "type": "number" },
+    "segment_end": { "type": "number" },
+    "segment_count": { "type": "integer" },
+    
+    "desc_centroid": { "type": "number" },
+    "desc_flux": { "type": "number" },
+    "desc_noisiness": { "type": "number" },
+    "desc_harmonicity": { "type": "number" },
+    "desc_loudness": { "type": "number" },
+    "desc_semantic": { "type": "string" },
+    
+    "embed_audio_model": { "type": "string" },
+    "embed_audio_dim": { "type": "integer" },
+    "embed_audio_ref": { "type": "string" },
+    "embed_semantic_model": { "type": "string" },
+    "embed_semantic_dim": { "type": "integer" },
+    "embed_semantic_ref": { "type": "string" },
+    
+    "gesture_type": { "type": "string" },
+    "gesture_energy": { "type": "string" },
+    "gesture_speed": { "type": "string" },
+    "gesture_direction": { "type": "string" },
+    "gesture_source": { "type": "string" },
+    
+    "video_file": { "type": "string" },
+    "video_start": { "type": "number" },
+    "video_end": { "type": "number" },
+    "video_fps": { "type": "integer" },
+    
+    "glily_expr": { "type": "string" },
+    "lilypond_vars": { "type": "string" },
+    "lilypond_file": { "type": "string" },
+    "svg_file": { "type": "string" },
+    
+    "morph_type": { "type": "string" },
+    "morph_onset": { "type": "string" },
+    "morph_decay": { "type": "string" },
+    "morph_evolution": { "type": "string" },
+    
+    "moaie_material": { "type": "string" },
+    "moaie_object": { "type": "string" },
+    "moaie_agent": { "type": "string" },
+    "moaie_interaction": { "type": "string" },
+    "moaie_environment": { "type": "string" },
+    
+    "related_tae": { "type": "string" },
+    "variant_of": { "type": "string" },
+    "family": { "type": "string" },
+    
+    "source": { "type": "string" },
+    "license": { "type": "string" },
+    "tags": { "type": "string" },
+    
+    "created_by": { "type": "string" },
+    "checksum": { "type": "string" },
+    "status": { "type": "string" }
+  },
+  "additionalProperties": true
+}

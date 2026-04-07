@@ -1,3 +1,8 @@
+{
+        admin 127.0.0.1:2019
+        email admin@zztt.org
+}
+
 glip.zztt.org {
     reverse_proxy /api/* 127.0.0.1:8000
     
@@ -10,4 +15,52 @@ glip.zztt.org {
         reverse_proxy 127.0.0.1:8090
     }
     reverse_proxy localhost:3001
+}
+
+soog.zztt.org {
+        handle /api/* {
+                reverse_proxy localhost:10000
+        }
+        handle /offload/* {
+                reverse_proxy localhost:10000
+        }
+        handle {
+                reverse_proxy localhost:3000
+        }
+}
+
+arpochat.zztt.org {
+        reverse_proxy localhost:8004
+}
+
+trawun.zztt.org {
+        reverse_proxy localhost:4000
+}
+
+cym.musiki.org.ar {
+        root * /opt/cym
+        file_server browse
+}
+
+ollama-api.zztt.org {
+        reverse_proxy 127.0.0.1:8787
+}
+
+dev.musiki.org.ar {
+  encode zstd gzip
+  reverse_proxy 127.0.0.1:4325
+}
+
+musiki.org.ar, www.musiki.org.ar {
+  encode zstd gzip
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+  }
+  reverse_proxy 127.0.0.1:4321
+}
+
+live.musiki.org.ar {
+      reverse_proxy localhost:7880
 }
