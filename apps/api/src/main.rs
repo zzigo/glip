@@ -440,14 +440,21 @@ async fn glip_librosa_handler() -> impl IntoResponse {
 
                     if let Some(analysis) = crate::analysis::get_analysis(audio) {
                         let mut desc = item["descriptors"].as_object().cloned().unwrap_or_default();
-                        
-                        let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
-                        
-                        desc.insert("desc_centroid".to_string(), serde_json::json!(mean(&analysis.centroid)));
-                        desc.insert("desc_rms".to_string(), serde_json::json!(mean(&analysis.rms)));
-                        desc.insert("desc_f0".to_string(), serde_json::json!(mean(&analysis.f0)));
-                        desc.insert("desc_zcr".to_string(), serde_json::json!(mean(&analysis.zcr)));
-                        desc.insert("desc_flatness".to_string(), serde_json::json!(mean(&analysis.flatness)));
+
+                        let mean = |v: &[f32]| {
+                            let nonzero: Vec<f32> = v.iter().copied().filter(|x| x.is_finite() && *x > 0.0).collect();
+                            if nonzero.is_empty() { 0.0 } else { nonzero.iter().sum::<f32>() / nonzero.len() as f32 }
+                        };
+
+                        desc.insert("desc_centroid".to_string(),  serde_json::json!(mean(&analysis.centroid)));
+                        desc.insert("desc_rms".to_string(),       serde_json::json!(mean(&analysis.rms)));
+                        desc.insert("desc_f0".to_string(),        serde_json::json!(mean(&analysis.f0)));
+                        // piptrack dominant freq — reliable even for inharmonic timbres
+                        desc.insert("desc_dom_freq".to_string(),  serde_json::json!(mean(&analysis.dom_freq)));
+                        // pyin voiced probability — 0=unvoiced/inharmonic, 1=clearly pitched
+                        desc.insert("desc_voiced_prob".to_string(), serde_json::json!(mean(&analysis.voiced_prob)));
+                        desc.insert("desc_zcr".to_string(),       serde_json::json!(mean(&analysis.zcr)));
+                        desc.insert("desc_flatness".to_string(),  serde_json::json!(mean(&analysis.flatness)));
                         
                         let _ = client
                             .patch(&format!("http://127.0.0.1:8090/api/collections/tae/records/{}", id))

@@ -16,6 +16,20 @@
 	let showHelp = $state(false);
 	let activeMainTab = $state('timeline');
 
+	// Status bar — replaces all alert() calls
+	let statusMsg  = $state('READY');
+	let statusKind = $state('idle'); // 'idle' | 'running' | 'ok' | 'error'
+	let _statusTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function setStatus(msg: string, kind: 'idle' | 'running' | 'ok' | 'error' = 'ok', autoClear = true) {
+		statusMsg  = msg;
+		statusKind = kind;
+		if (_statusTimer) clearTimeout(_statusTimer);
+		if (autoClear && kind !== 'running') {
+			_statusTimer = setTimeout(() => { statusMsg = 'READY'; statusKind = 'idle'; }, 6000);
+		}
+	}
+
 	async function loadAllPoints() {
 		try {
 			const res = await fetch('/api/points');
@@ -74,10 +88,10 @@
 	}
 
 	async function dumpToObsidian() {
+		setStatus('DUMP · generating obsidian zip...', 'running', false);
 		try {
 			const res = await fetch('/api/dump', { method: 'GET' });
 			if (!res.ok) throw new Error("Dump failed");
-			
 			const blob = await res.blob();
 			const url = window.URL.createObjectURL(blob);
 			const a = document.createElement('a');
@@ -86,44 +100,45 @@
 			document.body.appendChild(a);
 			a.click();
 			window.URL.revokeObjectURL(url);
-			
-			alert(`Dumped files and started download.`);
+			setStatus('DUMP · download started');
 		} catch (e) {
-			console.error("Dump failed", e);
-			alert("Dump failed: " + e.message);
+			setStatus('DUMP · failed: ' + e.message, 'error');
 		}
 	}
 
 	async function syncFromObsidian() {
+		setStatus('SYNC · reading obsidian folder...', 'running', false);
 		try {
 			const res = await fetch('/api/sync', { method: 'POST' });
 			const data = await res.json();
-			alert(`Synced ${data.synced} files from Obsidian folder`);
+			setStatus(`SYNC · ${data.synced} records updated`);
 			runQuery();
 		} catch (e) {
-			console.error("Sync failed", e);
+			setStatus('SYNC · failed', 'error');
 		}
 	}
 
 	async function regenGlyphs() {
+		setStatus('GLILY · regeneration started (background)', 'running', false);
 		try {
 			const res = await fetch('/api/glily/regen', { method: 'POST' });
 			const data = await res.json();
-			alert(`Regenerated ${data.updated} glyphs and synced to Obsidian.`);
+			setStatus('GLILY · ' + (data.message || `${data.updated ?? '?'} glyphs queued`));
 			loadAllPoints();
 		} catch (e) {
-			console.error("Regen failed", e);
+			setStatus('GLILY · failed', 'error');
 		}
 	}
 
 	async function runLibrosaUpdate() {
+		setStatus('LIBROSA · analyzing audio files — this may take a minute...', 'running', false);
 		try {
 			const res = await fetch('/api/glip/librosa', { method: 'POST' });
 			const data = await res.json();
-			alert(`Updated librosa analysis for ${data.updated} records.`);
+			setStatus(`LIBROSA · ${data.updated} records analyzed · centroid rms f0 dom_freq voiced_prob zcr flatness`);
 			loadAllPoints();
 		} catch (e) {
-			console.error("Librosa update failed", e);
+			setStatus('LIBROSA · failed: ' + e.message, 'error');
 		}
 	}
 
@@ -370,7 +385,25 @@
 											<div class="ebar-fill f0-fill"
 												style="width:{Math.min(100,(d.desc_f0||0)/2000*100)}%"></div>
 										</div>
-										<span class="ebar-val">{d.desc_f0 != null ? d.desc_f0.toFixed(1)+' Hz' : '—'}</span>
+										<span class="ebar-val">{d.desc_f0 != null && d.desc_f0 > 0 ? d.desc_f0.toFixed(1)+' Hz' : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">DOM F</span>
+										<div class="ebar-track">
+											<div class="ebar-fill domf-fill"
+												style="width:{Math.min(100,(d.desc_dom_freq||0)/4000*100)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_dom_freq != null && d.desc_dom_freq > 0 ? d.desc_dom_freq.toFixed(1)+' Hz' : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">VOICED</span>
+										<div class="ebar-track">
+											<div class="ebar-fill voiced-fill"
+												style="width:{Math.min(100,(d.desc_voiced_prob||0)*100)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_voiced_prob != null ? d.desc_voiced_prob.toFixed(2) : '—'}</span>
 									</div>
 
 									<div class="ebar-row">
@@ -425,11 +458,18 @@
 			</div>
 		</div>
 	</div>
+
+	<!-- Status bar — spans full width below the grid -->
+	<div class="status-bar" class:running={statusKind==='running'} class:ok={statusKind==='ok'} class:err={statusKind==='error'}>
+		<span class="status-dot"></span>
+		<span class="status-text">{statusMsg}</span>
+	</div>
 </div>
 
 <style>
 	.app-shell {
 		display: flex;
+		flex-direction: column;
 		height: 100vh;
 		width: 100vw;
 		background: #000;
@@ -531,6 +571,40 @@
 		text-align: center;
 		font-style: italic;
 	}
+
+	/* ── Status bar ── */
+	.status-bar {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		height: 20px;
+		padding: 0 12px;
+		background: #050505;
+		border-top: 1px solid #1a1a1a;
+		font-size: 9px;
+		color: #444;
+		letter-spacing: 0.08em;
+		flex-shrink: 0;
+		transition: color 0.3s;
+	}
+	.status-bar.ok    { color: #00ff88; }
+	.status-bar.err   { color: #ff4444; }
+	.status-bar.running { color: #ffaa00; }
+
+	.status-dot {
+		width: 5px; height: 5px;
+		border-radius: 50%;
+		background: currentColor;
+		flex-shrink: 0;
+	}
+	.status-bar.running .status-dot {
+		animation: pulse 1s ease-in-out infinite;
+	}
+	@keyframes pulse {
+		0%, 100% { opacity: 1; }
+		50%       { opacity: 0.2; }
+	}
+	.status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 	.blender-layout {
 		flex: 1;
@@ -779,6 +853,8 @@
 	.centroid-fill { background: #00ff88; }
 	.rms-fill      { background: #ff6644; }
 	.f0-fill       { background: #00ccff; }
+	.domf-fill     { background: #ff88cc; }  /* piptrack dominant — works for inharmonics */
+	.voiced-fill   { background: #88ffcc; }  /* pyin voiced probability */
 	.zcr-fill      { background: #cc88ff; }
 	.flat-fill     { background: #ffaa00; }
 

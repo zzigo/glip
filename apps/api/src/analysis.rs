@@ -10,6 +10,8 @@ pub struct AnalysisData {
     pub centroid: Vec<f32>,
     pub rms: Vec<f32>,
     pub f0: Vec<f32>,
+    pub dom_freq: Vec<f32>,     // piptrack dominant peak — works for inharmonic sounds
+    pub voiced_prob: Vec<f32>,  // pyin voiced probability — confidence in f0
     pub zcr: Vec<f32>,
     pub flatness: Vec<f32>,
     pub spectrogram: Vec<Vec<f32>>,
@@ -37,10 +39,20 @@ flatness = librosa.feature.spectral_flatness(y=y)
 S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=64)
 S_db = librosa.power_to_db(S, ref=np.max)
 
+# piptrack: dominant frequency per frame by energy — works for inharmonic sounds
+# where pyin returns NaN (unvoiced). Takes the peak with max magnitude each frame.
+pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
+dom_pitches = []
+for i in range(magnitudes.shape[1]):
+    col = magnitudes[:, i]
+    idx = int(col.argmax())
+    p = float(pitches[idx, i])
+    dom_pitches.append(p if p > 20.0 else 0.0)  # discard sub-20Hz artefacts
+dom_freq = np.array(dom_pitches, dtype=np.float32)
+
 def downsample(data, target=500):
-    if len(data.shape) > 1: data = data[0]
-    # Handle NaNs in f0
-    data = np.nan_to_num(data)
+    if hasattr(data, 'shape') and len(data.shape) > 1: data = data[0]
+    data = np.nan_to_num(np.asarray(data, dtype=np.float32))
     if len(data) <= target: return data.tolist()
     return [float(x) for x in data[::len(data)//target]]
 
@@ -51,6 +63,8 @@ result = {{
     "centroid": downsample(cent),
     "rms": downsample(rms),
     "f0": downsample(f0),
+    "dom_freq": downsample(dom_freq),
+    "voiced_prob": downsample(voiced_probs),
     "zcr": downsample(zcr),
     "flatness": downsample(flatness),
     "spectrogram": S_db.tolist()
