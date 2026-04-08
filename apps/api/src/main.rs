@@ -21,6 +21,7 @@ use std::fs;
 
 use reqwest::Client;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 
 use crate::ops::{TAE, TimelineEvent, generate_timeline};
 
@@ -474,6 +475,9 @@ async fn main() {
         .route("/api/near", get(near_handler))
         .route("/api/glily/regen", post(glily_regen_handler))
         .route("/api/glip/librosa", post(glip_librosa_handler))
+        // Serve audio files statically — used via SSH tunnel in local dev
+        // (in production Caddy serves /audio/* directly, bypassing the API)
+        .nest_service("/audio", ServeDir::new("/opt/glip/data/audio"))
         .layer(CorsLayer::permissive());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
