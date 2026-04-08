@@ -1,8 +1,4 @@
-Correcto. Sin la capa de notación, el sistema queda incompleto respecto a SOM: falta la inscripción reproducible y transferible. Lo que propones (GLILY) no es un “exportador”, sino un segundo lenguaje operativo paralelo a GLINO, conectado por TAE.
 
-Voy a integrarlo formalmente y extender el plan.
-
-⸻
 
 1. Posición de GLILY en el sistema
 
@@ -15,7 +11,7 @@ SOM
  └─ GLILY (inscripción simbólica)
 
 
-⸻
+---
 
 1.2 Relación clave
 
@@ -24,7 +20,7 @@ GLILY → símbolo
 TAE → puente
 
 
-⸻
+---
 
 1.3 Unidad extendida
 
@@ -41,7 +37,7 @@ TAE:
   gesture: ...
 
 
-⸻
+---
 
 2. Qué es GLILY
 
@@ -53,7 +49,7 @@ GLILY = dialecto operativo de LilyPond orientado a:
 	•	integración con GLIP
 	•	generación automática desde TAE
 
-⸻
+---
 
 3. Problema que resuelve
 
@@ -69,7 +65,7 @@ Problemas:
 	•	no conectado a corpus
 	•	no parametrizable fácilmente en runtime
 
-⸻
+---
 
 4. Tu intuición (formalizada)
 
@@ -94,7 +90,7 @@ template(score):
 }
 
 
-⸻
+---
 
 4.2 Módulo instrumental
 
@@ -112,7 +108,7 @@ vector: fingering / activation pattern
 	•	texto técnico
 	•	opcional: referencia a TAE
 
-⸻
+---
 
 5. Tipos de construcciones GLILY
 
@@ -123,7 +119,7 @@ part{...}
 ensemble{...}
 
 
-⸻
+---
 
 5.2 Instrument abstractions
 
@@ -138,7 +134,7 @@ vl
 (make-staff "Flute")
 
 
-⸻
+---
 
 5.3 Modules
 
@@ -147,7 +143,7 @@ solo{...}
 cluster{...}
 
 
-⸻
+---
 
 5.4 Gesture-symbol bridges
 
@@ -158,7 +154,7 @@ cl.m{...}
 	•	digitación
 	•	símbolo gráfico
 
-⸻
+---
 
 5.5 Direct Lily embedding
 
@@ -166,7 +162,7 @@ cl.m{...}
 
 → passthrough
 
-⸻
+---
 
 6. Integración GLINO ↔ GLILY
 
@@ -182,7 +178,7 @@ score{
 }
 
 
-⸻
+---
 
 Pipeline
 
@@ -197,7 +193,7 @@ LilyPond
 PDF / SVG
 
 
-⸻
+---
 
 7. Parser GLILY (arquitectura)
 
@@ -214,7 +210,7 @@ template expansion
 lilypond output
 
 
-⸻
+---
 
 7.2 AST ejemplo
 
@@ -228,7 +224,7 @@ lilypond output
 }
 
 
-⸻
+---
 
 7.3 Backend
 
@@ -236,13 +232,13 @@ Puede vivir en:
 	•	JS (rápido para prototipo)
 	•	o Rust (si unificas con OPS)
 
-⸻
+---
 
 8. Extensión al PLAN.md
 
 Te dejo versión actualizada.
 
-⸻
+---
 
 PLAN.md (EXTENDED)
 
@@ -254,7 +250,7 @@ SOM system:
 	•	GLINO → audio operation
 	•	GLILY → symbolic inscription
 
-⸻
+---
 
 2. GLINO
 
@@ -266,7 +262,7 @@ Language for:
 Output:
 audio
 
-⸻
+---
 
 3. GLILY
 
@@ -278,7 +274,7 @@ Language for:
 Output:
 LilyPond → PDF/SVG
 
-⸻
+---
 
 4. Data Model
 
@@ -291,7 +287,7 @@ TAE:
 	•	symbol (svg/lily)
 	•	metadata
 
-⸻
+---
 
 5. Dual Pipeline
 
@@ -303,7 +299,7 @@ Symbolic
 
 GLILY → parser → LilyPond → render
 
-⸻
+---
 
 6. Interface Integration
 
@@ -315,7 +311,7 @@ Panels:
 	•	Timeline
 	•	Vector space
 
-⸻
+---
 
 7. GLILY Syntax (v0.1)
 
@@ -327,14 +323,14 @@ Instrument module
 
 cl.m { e’c’‘fis’’’ 0 0 0 x 0 0 1 }
 
-⸻
+---
 
 8. MVP Additions
 	•	GLILY parser (basic)
 	•	LilyPond export
 	•	SVG preview
 
-⸻
+---
 
 9. Roadmap Extension
 
@@ -347,13 +343,13 @@ Phase 7:
 Phase 8:
 	•	dynamic score rendering
 
-⸻
+---
 
 10. Key Principle
 
 Sound and notation are co-generated.
 
-⸻
+---
 
 9. Insight final (muy importante)
 
@@ -370,9 +366,9 @@ Eso es exactamente lo que faltaba en:
 	•	Orchidea
 	•	Suno
 
-⸻
+---
 
-⸻
+---
 
 11. Implementación Actual (2026-04-07)
 

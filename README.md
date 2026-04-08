@@ -1,4 +1,4 @@
-# glip (Speculative Organology Model)
+# glip (gestural library for instruments and performances)
 
 Repositorio central del sistema **GLIP**, la capa operativa del modelo **SOM**.
 
