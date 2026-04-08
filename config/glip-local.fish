@@ -12,16 +12,17 @@
 #   glip-status         → muestra qué puertos están activos
 
 # ─── CONFIGURA AQUÍ ──────────────────────────────────────────
-set -l GLIP_VPS_USER "zz"                     # usuario SSH en el VPS
-set -l GLIP_VPS_HOST "vps2.zztt.org"          # host del VPS
-set -l GLIP_REPO     "$HOME/dev/glip"          # ruta local del repo
-# Si el repo está en otro lugar, puedes overridear con:
-#   set -x GLIP_REPO /ruta/a/glip
+# set -g para que las funciones definidas abajo puedan leer estas variables
+set -g GLIP_VPS_USER "zz"                     # usuario SSH en el VPS
+set -g GLIP_VPS_HOST "vps2.zztt.org"          # host del VPS
+set -g GLIP_REPO     "$HOME/dev/glip"          # ruta local del repo (fallback)
+# Para overridear antes de sourcear:
+#   set -gx GLIP_REPO /ruta/a/glip
 
-# Detectar ruta del repo desde el directorio del script
-set -l _script_dir (dirname (status --current-filename))
+# Auto-detectar desde la ubicación del script
+set -l _script_dir (dirname (realpath (status --current-filename)))
 if test -d "$_script_dir/../apps"
-    set GLIP_REPO (realpath "$_script_dir/..")
+    set -g GLIP_REPO (realpath "$_script_dir/..")
 end
 
 # ─── TUNNEL ──────────────────────────────────────────────────
@@ -37,13 +38,12 @@ function glip-tunnel
     end
 
     echo "[glip] abriendo tunnel → $GLIP_VPS_USER@$GLIP_VPS_HOST"
-    ssh -fN \
+    ssh -fNM \
         -o ServerAliveInterval=30 \
         -o ServerAliveCountMax=3 \
         -o ExitOnForwardFailure=yes \
         -L 8000:localhost:8000 \
         -L 8090:localhost:8090 \
-        -L 11434:localhost:11434 \
         -S /tmp/glip-ssh-tunnel.sock \
         "$GLIP_VPS_USER@$GLIP_VPS_HOST"
 
@@ -129,7 +129,7 @@ function glip-status
     end
 
     # API
-    if curl -sf http://localhost:8000/api/near?k=1 > /dev/null 2>&1
+    if curl -sf 'http://localhost:8000/api/near?k=1' > /dev/null 2>&1
         echo "API:     ✓ http://localhost:8000"
     else
         echo "API:     ✗ no responde"
