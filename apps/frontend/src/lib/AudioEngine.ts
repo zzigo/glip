@@ -3,6 +3,8 @@ export class AudioEngine {
     private bufferCache: Map<string, AudioBuffer> = new Map();
     private proximitySources: Map<string, { source: AudioBufferSourceNode, gainNode: GainNode }> = new Map();
     private currentTaeSource: AudioBufferSourceNode | null = null;
+    // Guard: prevents updateProximity() from starting new sources after stopAllProximity()
+    private proximityEnabled: boolean = false;
 
     constructor() {}
 
@@ -112,57 +114,86 @@ export class AudioEngine {
         }
     }
 
+    enableProximity() {
+        this.proximityEnabled = true;
+    }
+
     async updateProximity(sounds: { id: string, audio: string, gain: number }[]) {
+        // Guard: if stopAllProximity() was called, don't start new sources
+        if (!this.proximityEnabled) return;
+
         const ctx = this.initContext();
         const activeIds = new Set(sounds.map(s => s.id));
 
-        // 1. Stop sounds no longer in zone
+        // 1. Fade out and stop sounds no longer in zone
         for (const [id, data] of this.proximitySources.entries()) {
             if (!activeIds.has(id)) {
                 try {
-                    data.gainNode.gain.value = 0;
-                    data.source.stop();
+                    data.gainNode.gain.setTargetAtTime(0, ctx.currentTime, 0.03);
+                    data.source.stop(ctx.currentTime + 0.1);
                 } catch(e) {}
                 this.proximitySources.delete(id);
             }
         }
 
-        // 2. Start/Update sounds
+        // 2. Start/Update sounds (only if still enabled after awaiting load)
         for (const s of sounds) {
             let data = this.proximitySources.get(s.id);
             if (!data) {
                 try {
                     const url = `/audio/${s.audio}`;
                     const buffer = await this.loadBuffer(url);
+
+                    // Re-check after async load — user may have left the canvas
+                    if (!this.proximityEnabled) return;
+
                     const source = ctx.createBufferSource();
                     const gainNode = ctx.createGain();
-                    
+
                     source.buffer = buffer;
                     source.loop = true;
                     gainNode.gain.value = 0;
-                    
+
                     source.connect(gainNode);
                     gainNode.connect(ctx.destination);
-                    
+
                     source.start();
                     data = { source, gainNode };
                     this.proximitySources.set(s.id, data);
                 } catch(e) { continue; }
             }
-            
+
             // Smoothly update gain
             data.gainNode.gain.setTargetAtTime(s.gain, ctx.currentTime, 0.05);
         }
     }
 
     async stopAllProximity() {
-        const ctx = this.initContext();
-        for (const [id, data] of this.proximitySources.entries()) {
+        // Disable first — blocks any in-flight updateProximity() calls
+        this.proximityEnabled = false;
+
+        const ctx = this.ctx;
+        if (!ctx) {
+            this.proximitySources.clear();
+            return;
+        }
+
+        // Ramp all gains to 0 immediately, then hard-stop after fade
+        for (const [, data] of this.proximitySources.entries()) {
             try {
-                data.source.stop();
+                data.gainNode.gain.cancelScheduledValues(ctx.currentTime);
+                data.gainNode.gain.setTargetAtTime(0, ctx.currentTime, 0.02);
             } catch(e) {}
         }
+
+        const toStop = new Map(this.proximitySources);
         this.proximitySources.clear();
+
+        setTimeout(() => {
+            for (const [, data] of toStop.entries()) {
+                try { data.source.stop(); } catch(e) {}
+            }
+        }, 120);
     }
 
     getPeaks(buffer: AudioBuffer, width: number): { min: Float32Array, max: Float32Array } {

@@ -342,16 +342,65 @@
 						
 						<details open class="analysis-details">
 							<summary>EMERGING ANALYSIS</summary>
-							<div class="desc-grid">
-								{#if selectedTae.descriptors}
-									{#each Object.entries(selectedTae.descriptors) as [k, v]}
-										<div class="desc-item">
-											<span class="desc-key">{k}</span>
-											<span class="desc-val">{typeof v === 'number' ? v.toFixed(3) : v}</span>
+							{#if selectedTae.descriptors}
+								{@const d = selectedTae.descriptors}
+								<div class="emergent-bars">
+
+									<div class="ebar-row">
+										<span class="ebar-label">CENTROID</span>
+										<div class="ebar-track">
+											<div class="ebar-fill centroid-fill"
+												style="width:{Math.min(100,(d.desc_centroid||0)/8000*100)}%"></div>
 										</div>
-									{/each}
-								{/if}
-							</div>
+										<span class="ebar-val">{d.desc_centroid != null ? d.desc_centroid.toFixed(0)+' Hz' : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">RMS</span>
+										<div class="ebar-track">
+											<div class="ebar-fill rms-fill"
+												style="width:{Math.min(100,(d.desc_rms||0)*100*8)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_rms != null ? d.desc_rms.toFixed(4) : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">F0</span>
+										<div class="ebar-track">
+											<div class="ebar-fill f0-fill"
+												style="width:{Math.min(100,(d.desc_f0||0)/2000*100)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_f0 != null ? d.desc_f0.toFixed(1)+' Hz' : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">ZCR</span>
+										<div class="ebar-track">
+											<div class="ebar-fill zcr-fill"
+												style="width:{Math.min(100,(d.desc_zcr||0)*100*20)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_zcr != null ? d.desc_zcr.toFixed(4) : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">FLATNESS</span>
+										<div class="ebar-track">
+											<div class="ebar-fill flat-fill"
+												style="width:{Math.min(100,(d.desc_flatness||0)*100)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_flatness != null ? d.desc_flatness.toFixed(4) : '—'}</span>
+									</div>
+
+									{#if d.desc_centroid != null}
+										{@const isKiki = d.desc_centroid > 3000 || (d.desc_flatness||0) > 0.3}
+										<div class="kiki-bouba-tag" class:kiki={isKiki} class:bouba={!isKiki}>
+											{isKiki ? 'KIKI' : 'BOUBA'} — {isKiki ? 'bright · noisy · angular' : 'dark · harmonic · smooth'}
+										</div>
+									{/if}
+								</div>
+							{:else}
+								<div class="empty" style="padding: 15px;">RUN glip.librosa TO ANALYZE</div>
+							{/if}
 						</details>
 
 						{#each metadataGroups as group}
@@ -369,38 +418,6 @@
 								</div>
 							</details>
 						{/each}
-
-						<details open>
-							<summary>EMERGING ANALYSIS</summary>
-							<div class="analysis-section">
-								{#if selectedTae.descriptors}
-									<div class="desc-grid">
-										<div class="desc-item">
-											<span>Centroid:</span>
-											<span>{selectedTae.descriptors.desc_centroid?.toFixed(2) || 'N/A'}</span>
-										</div>
-										<div class="desc-item">
-											<span>RMS:</span>
-											<span>{selectedTae.descriptors.desc_rms?.toFixed(4) || 'N/A'}</span>
-										</div>
-										<div class="desc-item">
-											<span>F0 (pitch):</span>
-											<span>{selectedTae.descriptors.desc_f0?.toFixed(2) || 'N/A'} Hz</span>
-										</div>
-										<div class="desc-item">
-											<span>ZCR:</span>
-											<span>{selectedTae.descriptors.desc_zcr?.toFixed(4) || 'N/A'}</span>
-										</div>
-										<div class="desc-item">
-											<span>Flatness:</span>
-											<span>{selectedTae.descriptors.desc_flatness?.toFixed(4) || 'N/A'}</span>
-										</div>
-									</div>
-								{:else}
-									<div class="empty">NO DESCRIPTORS</div>
-								{/if}
-							</div>
-						</details>
 					</div>
 				{:else}
 					<div class="empty">NO SELECTION</div>
@@ -735,4 +752,73 @@
 		cursor: pointer;
 	}
 	.main-tabs button.active { color: #fff; }
+
+	/* ── EMERGING ANALYSIS bars ── */
+	.emergent-bars {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 10px;
+	}
+
+	.ebar-row {
+		display: grid;
+		grid-template-columns: 58px 1fr 56px;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.ebar-label {
+		font-size: 7px;
+		color: #555;
+		letter-spacing: 0.06em;
+		text-align: right;
+	}
+
+	.ebar-track {
+		height: 3px;
+		background: #111;
+		overflow: hidden;
+	}
+
+	.ebar-fill {
+		height: 100%;
+		min-width: 1px;
+		transition: width 0.5s ease;
+	}
+
+	.centroid-fill { background: #00ff88; }
+	.rms-fill      { background: #ff6644; }
+	.f0-fill       { background: #00ccff; }
+	.zcr-fill      { background: #cc88ff; }
+	.flat-fill     { background: #ffaa00; }
+
+	.ebar-val {
+		font-size: 7px;
+		color: #444;
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
+	.kiki-bouba-tag {
+		margin-top: 4px;
+		padding: 4px 8px;
+		font-size: 8px;
+		letter-spacing: 0.08em;
+		border: 1px solid #1a1a1a;
+		color: #555;
+	}
+
+	.kiki-bouba-tag.kiki {
+		border-color: #2a1a1a;
+		color: #ff6644;
+		background: #100808;
+	}
+
+	.kiki-bouba-tag.bouba {
+		border-color: #1a2a1a;
+		color: #00ff88;
+		background: #080f08;
+	}
 </style>

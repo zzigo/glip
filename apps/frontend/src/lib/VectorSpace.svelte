@@ -134,12 +134,17 @@
 		const rect = canvas.getBoundingClientRect();
 		mouseX = e.clientX - rect.left;
 		mouseY = e.clientY - rect.top;
+		if (!isMouseIn) {
+			// Re-arm proximity on re-entry
+			audioEngine.enableProximity();
+		}
 		isMouseIn = true;
 		draw();
 	}
 
 	function handleMouseLeave() {
 		isMouseIn = false;
+		// Mute immediately — guard prevents any queued updateProximity from re-starting
 		audioEngine.stopAllProximity();
 		draw();
 	}
