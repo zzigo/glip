@@ -714,17 +714,6 @@
 
 	input:focus { border-color: var(--accent); }
 
-	.desc-grid {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 5px;
-		padding: 10px;
-		font-size: 9px;
-	}
-
-	.desc-item { display: flex; justify-content: space-between; color: #666; }
-	.desc-val { color: var(--accent); }
-
 	.empty {
 		color: #444;
 		font-size: 10px;

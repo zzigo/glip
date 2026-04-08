@@ -114,6 +114,16 @@ export class AudioEngine {
         }
     }
 
+    // Call this from any click/keydown handler to unblock the AudioContext
+    resume() {
+        if (!this.ctx) {
+            this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+        if (this.ctx.state === 'suspended') {
+            this.ctx.resume();
+        }
+    }
+
     enableProximity() {
         this.proximityEnabled = true;
     }
@@ -163,6 +173,9 @@ export class AudioEngine {
                 } catch(e) { continue; }
             }
 
+            // Guard: stopAllProximity() may have fired while we were awaiting loadBuffer
+            if (!this.proximityEnabled) return;
+
             // Smoothly update gain
             data.gainNode.gain.setTargetAtTime(s.gain, ctx.currentTime, 0.05);
         }
@@ -178,11 +191,11 @@ export class AudioEngine {
             return;
         }
 
-        // Ramp all gains to 0 immediately, then hard-stop after fade
+        // Kill all scheduled gain changes and set to 0 immediately
         for (const [, data] of this.proximitySources.entries()) {
             try {
                 data.gainNode.gain.cancelScheduledValues(ctx.currentTime);
-                data.gainNode.gain.setTargetAtTime(0, ctx.currentTime, 0.02);
+                data.gainNode.gain.setValueAtTime(0, ctx.currentTime);
             } catch(e) {}
         }
 

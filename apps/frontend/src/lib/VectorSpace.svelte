@@ -42,6 +42,14 @@
 		};
 	}
 
+	// Component-level so handleCanvasClick can also use them
+	function toScreenX(nx: number) {
+		return (nx - 0.5) * zoom * width + width/2 + offsetX;
+	}
+	function toScreenY(ny: number) {
+		return (ny - 0.5) * zoom * height + height/2 + offsetY;
+	}
+
 	function draw() {
 		if (!canvas) return;
 		const ctx = canvas.getContext('2d');
@@ -52,9 +60,6 @@
 		const rangeY = maxY - minY || 1;
 
 		ctx.clearRect(0, 0, width, height);
-		
-		const toScreenX = (nx) => (nx - 0.5) * zoom * width + width/2 + offsetX;
-		const toScreenY = (ny) => (ny - 0.5) * zoom * height + height/2 + offsetY;
 
 		// Draw Grid
 		ctx.strokeStyle = '#1a1a1a';
@@ -180,6 +185,8 @@
 	}
 
 	function handleCanvasClick(e: MouseEvent) {
+		// Resume AudioContext — browsers require a click/keydown gesture
+		audioEngine.resume();
 		const rect = canvas.getBoundingClientRect();
 		const mx = e.clientX - rect.left;
 		const my = e.clientY - rect.top;
