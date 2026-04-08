@@ -7,6 +7,7 @@ pub struct TAE {
     pub score: f32,
     pub audio: String,
     pub symbol: String,
+    pub descriptors: serde_json::Value,  // desc_centroid, desc_rms, desc_f0, etc.
 }
 
 #[derive(Debug, Serialize, Clone)]

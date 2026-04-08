@@ -292,108 +292,133 @@ async fn ingest_handler(mut multipart: axum::extract::Multipart) -> Json<serde_j
     Json(serde_json::json!({ "status": "ok", "processed": files_processed }))
 }
 
+/// Fetches the PocketBase record for a given tae_id string (the short UUID from ingest).
+/// Returns (descriptors JSON, symbol_svg string).
+async fn pb_fetch_descriptors(client: &Client, tae_id: &str) -> (serde_json::Value, String) {
+    // PocketBase filter: field `tae_id` equals the value
+    let filter = format!("tae_id%3D%22{}%22", tae_id); // url-encode tae_id="..."
+    let url = format!(
+        "http://127.0.0.1:8090/api/collections/tae/records?filter={}&perPage=1",
+        filter
+    );
+    if let Ok(resp) = client.get(&url).send().await {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(item) = json["items"].as_array().and_then(|a| a.first()) {
+                let symbol = item["symbol"].as_str().unwrap_or("").to_string();
+                let desc = item["descriptors"].clone();
+                // descriptors may be a JSON string (PocketBase JSON field) or object
+                let desc_val = if desc.is_string() {
+                    serde_json::from_str(desc.as_str().unwrap_or("{}"))
+                        .unwrap_or(serde_json::Value::Object(Default::default()))
+                } else {
+                    desc
+                };
+                return (desc_val, symbol);
+            }
+        }
+    }
+    (serde_json::Value::Object(Default::default()), String::new())
+}
+
 async fn near_handler(Query(params): Query<NearParams>) -> Json<NearResponse> {
     let q_str = params.q.unwrap_or_else(|| "glip:*".to_string());
     let glino_query = glino::parse_query(&q_str);
     let client = Client::new();
-    let mut results: Vec<TAE> = Vec::new();
-
     let default_glily = if q_str.contains("cl.m") { "cl.m" } else { "" };
 
-    if glino_query.is_list {
+    let raw_points: Vec<serde_json::Value> = if glino_query.is_list {
         let res = client
             .post("http://127.0.0.1:6333/collections/tae/points/scroll")
             .json(&serde_json::json!({ "limit": 100, "with_payload": true }))
             .send().await;
-
         if let Ok(resp) = res {
             if let Ok(json) = resp.json::<serde_json::Value>().await {
-                if let Some(points) = json["result"]["points"].as_array() {
-                    for p in points {
-                        let id = p["payload"]["tae_id"].as_str().unwrap_or("unknown").to_string();
-                        let audio = p["payload"]["file_name"].as_str().unwrap_or("unknown.wav").to_string();
-                        let descriptors = p["payload"]["descriptors"].clone();
-                        let symbol_res = glily::parse_to_symbol(default_glily, Some(&descriptors));
-                        results.push(TAE { id, score: 1.0, audio, symbol: symbol_res.svg });
-                    }
-                }
-            }
-        }
+                json["result"]["points"].as_array().cloned().unwrap_or_default()
+            } else { Vec::new() }
+        } else { Vec::new() }
     } else {
         let k = params.k.unwrap_or(glino_query.struct_sequence.unwrap_or(10));
-        let vector = params.vector.map(|v| v.split(',').filter_map(|x| x.parse::<f32>().ok()).collect()).unwrap_or(vec![0.1; 512]);
-        let mut search_body = serde_json::json!({ "vector": vector, "limit": k, "with_payload": true });
-        
-        // Dynamic Filter construction
+        let vector = params.vector
+            .map(|v| v.split(',').filter_map(|x| x.parse::<f32>().ok()).collect())
+            .unwrap_or(vec![0.1; 512]);
+        let mut search_body = serde_json::json!({
+            "vector": vector, "limit": k, "with_payload": true
+        });
         let mut filter_must = Vec::new();
         if let Some(source) = &glino_query.source {
             if source != "*" {
-                filter_must.push(serde_json::json!({ "key": "file_name", "match": { "text": source } }));
+                filter_must.push(serde_json::json!({
+                    "key": "file_name", "match": { "text": source }
+                }));
             }
         }
         if let Some(desc) = &glino_query.filter_descriptor {
-             filter_must.push(serde_json::json!({ "key": "descriptor", "match": { "text": desc } }));
+            filter_must.push(serde_json::json!({
+                "key": "descriptor", "match": { "text": desc }
+            }));
         }
         if !filter_must.is_empty() {
             search_body["filter"] = serde_json::json!({ "must": filter_must });
         }
-
-        let res = client.post("http://127.0.0.1:6333/collections/tae/points/search").json(&search_body).send().await;
+        let res = client
+            .post("http://127.0.0.1:6333/collections/tae/points/search")
+            .json(&search_body).send().await;
         if let Ok(resp) = res {
             if let Ok(json) = resp.json::<serde_json::Value>().await {
-                if let Some(points) = json["result"].as_array() {
-                    for p in points {
-                        let id = p["payload"]["tae_id"].as_str().unwrap_or("unknown").to_string();
-                        let score = p["score"].as_f64().unwrap_or(0.0) as f32;
-                        let audio = p["payload"]["file_name"].as_str().unwrap_or("unknown.wav").to_string();
-                        let descriptors = p["payload"]["descriptors"].clone();
-                        let symbol_res = glily::parse_to_symbol(default_glily, Some(&descriptors));
-                        results.push(TAE { id, score, audio, symbol: symbol_res.svg });
-                    }
-                }
-            }
+                json["result"].as_array().cloned().unwrap_or_default()
+            } else { Vec::new() }
+        } else { Vec::new() }
+    };
+
+    // Enrich each point with descriptors + symbol from PocketBase (parallel)
+    let fetch_futs: Vec<_> = raw_points.iter().map(|p| {
+        let tae_id = p["payload"]["tae_id"].as_str().unwrap_or("unknown").to_string();
+        let audio   = p["payload"]["file_name"].as_str().unwrap_or("unknown.wav").to_string();
+        let score   = p["score"].as_f64().unwrap_or(1.0) as f32;
+        let client  = client.clone();
+        async move {
+            let (descriptors, pb_symbol) = pb_fetch_descriptors(&client, &tae_id).await;
+            // Use symbol from PocketBase if available, otherwise generate from descriptors
+            let symbol = if !pb_symbol.is_empty() {
+                pb_symbol
+            } else {
+                glily::parse_to_symbol(default_glily, Some(&descriptors)).svg
+            };
+            TAE { id: tae_id, score, audio, symbol, descriptors }
         }
-    }
+    }).collect();
+
+    let results: Vec<TAE> = futures::future::join_all(fetch_futs).await;
 
     let timeline = generate_timeline(results.clone(), &glino_query);
     Json(NearResponse { results, timeline, query_parsed: glino_query })
 }
 
 async fn glily_regen_handler() -> impl IntoResponse {
-    let client = Client::new();
-    let res = client
-        .get("http://127.0.0.1:8090/api/collections/tae/records?perPage=500")
-        .send()
-        .await;
+    // Spawn glymph_regen.py in the background — it handles Ollama→B2 fallback
+    // and PATCHes symbol_svg for each TAE in PocketBase.
+    let spawn_result = tokio::process::Command::new(
+            "/opt/glip/apps/indexer/venv/bin/python3"
+        )
+        .arg("/opt/glip/scripts/glymph_regen.py")
+        .arg("--mode").arg("all")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 
-    let mut count = 0;
-    if let Ok(resp) = res {
-        if let Ok(json) = resp.json::<serde_json::Value>().await {
-            if let Some(items) = json["items"].as_array() {
-                for item in items {
-                    let id = item["id"].as_str().unwrap_or("");
-                    let glily_str = item["glily"].as_str().unwrap_or("");
-                    let descriptors = item.get("descriptors");
-                    
-                    let symbol_res = glily::parse_to_symbol(glily_str, descriptors);
-                    
-                    let res_patch = client
-                        .patch(&format!("http://127.0.0.1:8090/api/collections/tae/records/{}", id))
-                        .json(&serde_json::json!({ "symbol": symbol_res.svg }))
-                        .send()
-                        .await;
-
-                    if let Ok(resp) = res_patch {
-                        if let Ok(updated_item) = resp.json::<serde_json::Value>().await {
-                            sync_obsidian_note(&updated_item);
-                        }
-                    }
-                    count += 1;
-                }
-            }
+    match spawn_result {
+        Ok(_child) => {
+            // Fire-and-forget: child runs independently, we return immediately
+            Json(serde_json::json!({
+                "status": "ok",
+                "message": "glymph_regen.py started — regenerating glyphs via TXT2SVG pipeline"
+            }))
         }
+        Err(e) => Json(serde_json::json!({
+            "status": "error",
+            "message": format!("Failed to spawn glymph_regen.py: {}", e)
+        })),
     }
-    Json(serde_json::json!({ "status": "ok", "updated": count }))
 }
 
 async fn glip_librosa_handler() -> impl IntoResponse {
@@ -409,7 +434,7 @@ async fn glip_librosa_handler() -> impl IntoResponse {
             if let Some(items) = json["items"].as_array() {
                 for item in items {
                     let id = item["id"].as_str().unwrap_or("");
-                    let audio = item["file_name"].as_str().unwrap_or("");
+                    let audio = item["audio"].as_str().unwrap_or("");
                     if audio.is_empty() { continue; }
 
                     if let Some(analysis) = crate::analysis::get_analysis(audio) {

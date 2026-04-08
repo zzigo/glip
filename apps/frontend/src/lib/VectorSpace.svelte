@@ -123,21 +123,20 @@
 			}
 		});
 
-		if (isMouseIn && proximitySounds.length > 0) {
+		if (isMouseIn) {
+			// updateProximity handles both starting new sounds and fading out
+			// ones that left the zone — pass empty array to fade all out
 			audioEngine.updateProximity(proximitySounds);
-		} else {
-			audioEngine.stopAllProximity();
 		}
+		// Note: stopAllProximity() is only called in handleMouseLeave — never from draw()
 	}
 
 	function handleMouseMove(e: MouseEvent) {
 		const rect = canvas.getBoundingClientRect();
 		mouseX = e.clientX - rect.left;
 		mouseY = e.clientY - rect.top;
-		if (!isMouseIn) {
-			// Re-arm proximity on re-entry
-			audioEngine.enableProximity();
-		}
+		// Re-arm on every move — idempotent, safe to call repeatedly
+		audioEngine.enableProximity();
 		isMouseIn = true;
 		draw();
 	}

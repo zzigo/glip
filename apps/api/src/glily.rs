@@ -14,12 +14,13 @@ pub fn parse_to_symbol(glily_str: &str, descriptors: Option<&Value>) -> GlilyRes
     
     if let Some(desc) = descriptors {
         let centroid = desc.get("desc_centroid").and_then(|v| v.as_f64()).unwrap_or(2000.0);
-        let harmonicity = desc.get("desc_harmonicity").and_then(|v| v.as_f64()).unwrap_or(1.0);
+        // desc_flatness: 0=pure tone (Bouba), 1=pure noise (Kiki). Use instead of missing desc_harmonicity.
+        let flatness = desc.get("desc_flatness").and_then(|v| v.as_f64()).unwrap_or(0.3);
         let rms = desc.get("desc_rms").and_then(|v| v.as_f64()).unwrap_or(0.1);
         let dur = desc.get("audio_duration").and_then(|v| v.as_f64()).unwrap_or(1.0);
-        
-        // Kiki vs Bouba heuristic
-        if centroid > 3000.0 || harmonicity < 0.5 {
+
+        // Kiki vs Bouba heuristic: high centroid or flat spectrum → spiky/noisy Kiki
+        if centroid > 3000.0 || flatness > 0.5 {
             is_kiki = true;
         }
         
