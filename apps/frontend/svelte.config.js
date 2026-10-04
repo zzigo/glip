@@ -13,7 +13,11 @@ const config = {
 			return isExternalLibrary ? undefined : true;
 		}
 	},
-	kit: { adapter: adapter() }
+	kit: {
+		adapter: adapter(),
+		// Shared core + <glip-player> element (also vendored by musiki / so-web).
+		alias: { $glip: '../../packages/glip-player' }
+	}
 };
 
 export default config;

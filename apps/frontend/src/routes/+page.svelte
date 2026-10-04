@@ -1,889 +1,1049 @@
 <script lang="ts">
-	import DropZone from '$lib/DropZone.svelte';
-	import Waveform from '$lib/Waveform.svelte';
-	import VectorSpace from '$lib/VectorSpace.svelte';
-	import AnalysisViewer from '$lib/AnalysisViewer.svelte';
-	import { audioEngine } from '$lib/AudioEngine';
 	import { onMount } from 'svelte';
-	
-	let query = $state('list');
-	let results = $state([]);
-	let timeline = $state([]);
-	let allPoints = $state([]);
-	let selectedTae = $state(null);
-	let loading = $state(false);
-	let showMetadata = $state(true);
-	let showHelp = $state(false);
-	let activeMainTab = $state('timeline');
+	import type { PageData } from './$types';
+	import { formatTime } from '$glip/glip-core.js';
 
-	// Status bar — replaces all alert() calls
-	let statusMsg  = $state('READY');
-	let statusKind = $state('idle'); // 'idle' | 'running' | 'ok' | 'error'
-	let _statusTimer: ReturnType<typeof setTimeout> | null = null;
+	let { data }: { data: PageData } = $props();
 
-	function setStatus(msg: string, kind: 'idle' | 'running' | 'ok' | 'error' = 'ok', autoClear = true) {
-		statusMsg  = msg;
-		statusKind = kind;
-		if (_statusTimer) clearTimeout(_statusTimer);
-		if (autoClear && kind !== 'running') {
-			_statusTimer = setTimeout(() => { statusMsg = 'READY'; statusKind = 'idle'; }, 6000);
-		}
+	// Local list state
+	let items = $state(data.summaries || []);
+	let search = $state('');
+	let activeTab = $state<'all' | 'work' | 'composer' | 'tag'>('all');
+	let selectedTag = $state<string | null>(null);
+
+	// Player modal state
+	let playingId = $state<string | null>(null);
+	let playingAnnotation = $state<any | null>(null);
+	let playerModalEl: HTMLElement | null = $state(null);
+
+	// Toast state
+	let toastMsg = $state('');
+	let toastTimer = 0;
+
+	function showToast(msg: string) {
+		toastMsg = msg;
+		clearTimeout(toastTimer);
+		toastTimer = window.setTimeout(() => (toastMsg = ''), 3000);
 	}
 
-	async function loadAllPoints() {
-		try {
-			const res = await fetch('/api/points');
-			allPoints = await res.json();
-		} catch (e) {
-			console.error("Failed to load points", e);
-		}
-	}
-
-	let resultsSearch = $state('');
-	let filteredResults = $derived(
-		results.filter(r => 
-			r.audio.toLowerCase().includes(resultsSearch.toLowerCase()) || 
-			r.id.toLowerCase().includes(resultsSearch.toLowerCase()) ||
-			(r.name && r.name.toLowerCase().includes(resultsSearch.toLowerCase()))
-		)
-	);
-
-	async function runQuery() {
-		const q = query.trim().toLowerCase();
-		
-		// Command Interceptor
-		if (q === 'glily.regen') return await regenGlyphs();
-		if (q === 'glip.librosa') return await runLibrosaUpdate();
-		if (q === 'glip.dump' || q === 'dump') return await dumpToObsidian();
-		if (q === 'glip.sync') return await syncFromObsidian();
-
-		loading = true;
-		try {
-			const response = await fetch(`/api/near?k=10&q=${encodeURIComponent(query)}`);
-			const data = await response.json();
-			results = data.results;
-			timeline = data.timeline;
-			if (results.length > 0 && !selectedTae) selectedTae = results[0];
-		} catch (e) {
-			console.error("Query failed", e);
-		} finally {
-			loading = false;
-		}
-	}
-
-	async function saveMetadata() {
-		if (!selectedTae) return;
-		try {
-			await fetch('/api/metadata', {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					id: selectedTae.id,
-					metadata: selectedTae
-				})
-			});
-		} catch (e) {
-			console.error("Save failed", e);
-		}
-	}
-
-	async function dumpToObsidian() {
-		setStatus('DUMP · generating obsidian zip...', 'running', false);
-		try {
-			const res = await fetch('/api/dump', { method: 'GET' });
-			if (!res.ok) throw new Error("Dump failed");
-			const blob = await res.blob();
-			const url = window.URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = `glip_dump_${new Date().toISOString().slice(0,10)}.zip`;
-			document.body.appendChild(a);
-			a.click();
-			window.URL.revokeObjectURL(url);
-			setStatus('DUMP · download started');
-		} catch (e) {
-			setStatus('DUMP · failed: ' + e.message, 'error');
-		}
-	}
-
-	async function syncFromObsidian() {
-		setStatus('SYNC · reading obsidian folder...', 'running', false);
-		try {
-			const res = await fetch('/api/sync', { method: 'POST' });
-			const data = await res.json();
-			setStatus(`SYNC · ${data.synced} records updated`);
-			runQuery();
-		} catch (e) {
-			setStatus('SYNC · failed', 'error');
-		}
-	}
-
-	async function regenGlyphs() {
-		setStatus('GLILY · regeneration started (background)', 'running', false);
-		try {
-			const res = await fetch('/api/glily/regen', { method: 'POST' });
-			const data = await res.json();
-			setStatus('GLILY · ' + (data.message || `${data.updated ?? '?'} glyphs queued`));
-			loadAllPoints();
-		} catch (e) {
-			setStatus('GLILY · failed', 'error');
-		}
-	}
-
-	async function runLibrosaUpdate() {
-		setStatus('LIBROSA · analyzing audio files — this may take a minute...', 'running', false);
-		try {
-			const res = await fetch('/api/glip/librosa', { method: 'POST' });
-			const data = await res.json();
-			setStatus(`LIBROSA · ${data.updated} records analyzed · centroid rms f0 dom_freq voiced_prob zcr flatness`);
-			loadAllPoints();
-		} catch (e) {
-			setStatus('LIBROSA · failed: ' + e.message, 'error');
-		}
-	}
-
-	function selectTaeById(id, play = true) {
-		const tae = results.find(r => r.id === id) || allPoints.find(p => p.id === id);
-		if (tae) {
-			selectedTae = tae;
-			if (play) audioEngine.playTae(tae.audio);
-		}
-	}
-
-	onMount(() => {
-		loadAllPoints();
-		const handleKey = (e: KeyboardEvent) => {
-			if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-				e.preventDefault();
-				runQuery();
-			}
-			if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === '|') {
-				e.preventDefault();
-				showMetadata = !showMetadata;
-			}
-			if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
-				e.preventDefault();
-				showHelp = !showHelp;
-			}
-		};
-		window.addEventListener('keydown', handleKey);
-		return () => window.removeEventListener('keydown', handleKey);
+	onMount(async () => {
+		await import('$glip/glip-player.js');
 	});
 
-	const metadataGroups = [
-		{ label: 'Identity', fields: ['name', 'type', 'instrument', 'performer'] },
-		{ label: 'Acoustic Analysis', fields: ['desc_centroid', 'desc_f0', 'desc_harmonicity', 'desc_rms', 'desc_zcr', 'desc_flatness', 'desc_bandwidth'] },
-		{ label: 'Notation', fields: ['glily', 'glily_expr', 'lilypond_vars'] },
-		{ label: 'MOAIE Mapping', fields: ['moaie_material', 'moaie_object', 'moaie_agent', 'moaie_interaction', 'moaie_environment'] },
-		{ label: 'Relational', fields: ['related_tae', 'family', 'tags'] }
-	];
+	// Filtered list
+	let filteredItems = $derived(() => {
+		let list = items;
+		const q = search.trim().toLowerCase();
+		if (q) {
+			list = list.filter(
+				(item) =>
+					item.title?.toLowerCase().includes(q) ||
+					item.work?.toLowerCase().includes(q) ||
+					item.composer?.toLowerCase().includes(q) ||
+					item.tags?.some((t: string) => t.toLowerCase().includes(q))
+			);
+		}
+		if (selectedTag) {
+			list = list.filter((item) =>
+				item.tags?.some((t: string) => t.toLowerCase() === selectedTag?.toLowerCase())
+			);
+		}
+		return list;
+	});
+
+	// Available tags
+	let allTags = $derived(() => {
+		const set = new Set<string>();
+		for (const item of items) {
+			for (const t of item.tags || []) set.add(t);
+		}
+		return Array.from(set).sort();
+	});
+
+	// Grouping
+	let groupedItems = $derived(() => {
+		const list = filteredItems();
+		if (activeTab === 'work') {
+			const map = new Map<string, typeof list>();
+			for (const item of list) {
+				const key = item.work?.trim() || 'Sin obra especificada';
+				if (!map.has(key)) map.set(key, []);
+				map.get(key)!.push(item);
+			}
+			return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+		}
+		if (activeTab === 'composer') {
+			const map = new Map<string, typeof list>();
+			for (const item of list) {
+				const key = item.composer?.trim() || 'Sin compositor especificado';
+				if (!map.has(key)) map.set(key, []);
+				map.get(key)!.push(item);
+			}
+			return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+		}
+		if (activeTab === 'tag') {
+			const map = new Map<string, typeof list>();
+			for (const item of list) {
+				const tags = item.tags && item.tags.length > 0 ? item.tags : ['sin tags'];
+				for (const t of tags) {
+					if (!map.has(t)) map.set(t, []);
+					map.get(t)!.push(item);
+				}
+			}
+			return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+		}
+		return [];
+	});
+
+	async function playItem(id: string) {
+		playingId = id;
+		try {
+			const res = await fetch(`/api/annotations/${id}`);
+			if (res.ok) {
+				playingAnnotation = await res.json();
+				if (playerModalEl) {
+					(playerModalEl as any).annotation = playingAnnotation;
+				}
+			}
+		} catch (e) {
+			showToast('Error al cargar la anotación');
+		}
+	}
+
+	function closePlayer() {
+		playingId = null;
+		playingAnnotation = null;
+	}
+
+	function copyEmbed(id: string) {
+		const origin = typeof window !== 'undefined' ? window.location.origin : '';
+		const code = `<iframe src="${origin}/embed/${id}" width="100%" height="480" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+		navigator.clipboard.writeText(code);
+		showToast('✓ Código iframe copiado para Obsidian / web');
+	}
+
+	async function deleteItem(id: string) {
+		if (!confirm('¿Eliminar esta anotación?')) return;
+		try {
+			const res = await fetch(`/api/annotations/${id}`, { method: 'DELETE' });
+			if (res.ok) {
+				items = items.filter((x) => x.id !== id);
+				showToast('Anotación eliminada');
+			}
+		} catch {
+			showToast('Error al eliminar');
+		}
+	}
 </script>
 
-<div class="app-shell">
-	{#if showHelp}
-		<div class="modal-backdrop" onclick={() => showHelp = false}>
-			<div class="modal help-modal" onclick={(e) => e.stopPropagation()}>
-				<div class="modal-header">
-					<span>GLIP SYSTEM HELP <small style="color: #444; margin-left: 8px;">#797bb47</small></span>
-					<button onclick={() => showHelp = false}>&times;</button>
-				</div>
-				<div class="modal-body">
-					<div class="help-section">
-						<h3>GLIP COMMANDS</h3>
-						<div class="cmd-list">
-							<div class="cmd-item">
-								<code>list</code>
-								<span>List all available TAEs in the collection.</span>
-							</div>
-							<div class="cmd-item">
-								<code>glip.dump</code>
-								<span>Download a ZIP containing Markdown notes of all TAEs for Obsidian.</span>
-							</div>
-							<div class="cmd-item">
-								<code>glip.sync</code>
-								<span>Sync metadata from Obsidian files back to the database.</span>
-							</div>
-						</div>
-					</div>
+<svelte:head>
+	<title>glip · anotador multimedial</title>
+</svelte:head>
 
-					<div class="help-section">
-						<h3>GLILY COMMANDS</h3>
-						<div class="cmd-list">
-							<div class="cmd-item">
-								<code>glily.regen</code>
-								<span>Regenerate SVG glyphs (Kiki/Bouba heuristic) and sync to notes.</span>
-							</div>
-						</div>
-					</div>
+<div class="mobwork-page">
+	<!-- Header -->
+	<header class="top-nav">
+		<div class="brand">
+			<h1>glip</h1>
+			<span class="brand-sub">anotador multimedial</span>
+		</div>
 
-					<div class="help-section">
-						<h3>AUDIO ANALYSIS</h3>
-						<div class="cmd-list">
-							<div class="cmd-item">
-								<code>glip.librosa</code>
-								<span>Run deep acoustic analysis (Centroid, RMS, F0, ZCR, Flatness).</span>
-							</div>
-						</div>
-					</div>
+		<div class="nav-actions">
+			<a href="/annotate" class="btn btn-primary">+ Anotar video</a>
+			<a href="/dev" class="btn btn-subtle" title="Herramientas previas de análisis de audio">/dev</a>
+		</div>
+	</header>
 
-					<div class="help-section">
-						<h3>SHORTCUTS</h3>
-						<div class="shortcut-grid">
-							<span>Run Query</span> <code>CTRL + ENTER</code>
-							<span>Help Modal</span> <code>CTRL + H</code>
-							<span>Toggle Inspector</span> <code>CTRL + SHIFT + |</code>
+	<!-- Search & Scope filters -->
+	<section class="filter-section">
+		<div class="search-box">
+			<svg class="search-icon" viewBox="0 0 20 20" fill="currentColor">
+				<path
+					fill-rule="evenodd"
+					d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+					clip-rule="evenodd"
+				/>
+			</svg>
+			<input
+				type="search"
+				placeholder="Buscar por obra, compositor, tags o título..."
+				bind:value={search}
+			/>
+			{#if search}
+				<button type="button" class="clear-btn" onclick={() => (search = '')}>×</button>
+			{/if}
+		</div>
+
+		<!-- View modes -->
+		<div class="scope-tabs">
+			<button
+				type="button"
+				class="tab-btn"
+				class:active={activeTab === 'all'}
+				onclick={() => {
+					activeTab = 'all';
+					selectedTag = null;
+				}}
+			>
+				Todas ({filteredItems().length})
+			</button>
+			<button
+				type="button"
+				class="tab-btn"
+				class:active={activeTab === 'work'}
+				onclick={() => {
+					activeTab = 'work';
+					selectedTag = null;
+				}}
+			>
+				Por Obra
+			</button>
+			<button
+				type="button"
+				class="tab-btn"
+				class:active={activeTab === 'composer'}
+				onclick={() => {
+					activeTab = 'composer';
+					selectedTag = null;
+				}}
+			>
+				Por Compositor
+			</button>
+			<button
+				type="button"
+				class="tab-btn"
+				class:active={activeTab === 'tag'}
+				onclick={() => {
+					activeTab = 'tag';
+				}}
+			>
+				Por Tags
+			</button>
+		</div>
+
+		<!-- Tags Chips if present -->
+		{#if allTags().length > 0}
+			<div class="tags-scroller">
+				{#each allTags() as tag}
+					<button
+						type="button"
+						class="tag-chip"
+						class:active={selectedTag === tag}
+						onclick={() => (selectedTag = selectedTag === tag ? null : tag)}
+					>
+						#{tag}
+					</button>
+				{/each}
+			</div>
+		{/if}
+	</section>
+
+	<!-- Main List -->
+	<main class="content-body">
+		{#if filteredItems().length === 0}
+			<div class="empty-state">
+				<div class="empty-icon">🎬</div>
+				<h2>No hay anotaciones aún</h2>
+				<p>Crea tu primera anotación sincronizada con video de YouTube o Vimeo para usar en clases o análisis.</p>
+				<a href="/annotate" class="btn btn-primary">+ Anotar video</a>
+			</div>
+		{:else if activeTab === 'all'}
+			<!-- Flat Mobwork Table/List -->
+			<div class="mobwork-list">
+				{#each filteredItems() as item (item.id)}
+					<article class="mobwork-row">
+						<!-- Thumbnail -->
+						<div class="row-thumb" onclick={() => playItem(item.id)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && playItem(item.id)}>
+							{#if item.thumbnail}
+								<img src={item.thumbnail} alt={item.title} loading="lazy" />
+							{:else}
+								<div class="no-thumb">▶</div>
+							{/if}
+							<div class="play-overlay">▶</div>
+							{#if item.clip && (item.clip.in > 0 || item.clip.out != null)}
+								<span class="clip-pill">
+									{formatTime(item.clip.in)} → {item.clip.out != null ? formatTime(item.clip.out) : 'fin'}
+								</span>
+							{/if}
 						</div>
+
+						<!-- Details -->
+						<div class="row-info">
+							<div class="row-header">
+								<h2 class="row-title" onclick={() => playItem(item.id)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && playItem(item.id)}>
+									{item.title || item.work || 'Anotación sin título'}
+								</h2>
+								{#if item.year}
+									<span class="row-year">({item.year})</span>
+								{/if}
+							</div>
+
+							<div class="row-meta">
+								{#if item.composer}
+									<span class="meta-item"><strong>{item.composer}</strong></span>
+								{/if}
+								{#if item.work && item.title !== item.work}
+									<span class="meta-item">{item.work}</span>
+								{/if}
+								{#if item.shapeCount != null}
+									<span class="meta-badge">{item.shapeCount} marcas</span>
+								{/if}
+								<span class="provider-pill">{item.provider || 'video'}</span>
+							</div>
+
+							{#if item.tags && item.tags.length > 0}
+								<div class="row-tags">
+									{#each item.tags as t}
+										<span class="tag-pill" onclick={() => (selectedTag = t)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && (selectedTag = t)}>#{t}</span>
+									{/each}
+								</div>
+							{/if}
+						</div>
+
+						<!-- Actions -->
+						<div class="row-actions">
+							<button type="button" class="btn btn-sm btn-play" onclick={() => playItem(item.id)}>
+								▶ Ver
+							</button>
+							<a href="/annotate/{item.id}" class="btn btn-sm btn-subtle">
+								✎ Editar
+							</a>
+							<button type="button" class="btn btn-sm btn-subtle" title="Copiar iframe" onclick={() => copyEmbed(item.id)}>
+								📋 Embeber
+							</button>
+							<button type="button" class="btn btn-sm btn-danger-link" title="Eliminar" onclick={() => deleteItem(item.id)}>
+								🗑
+							</button>
+						</div>
+					</article>
+				{/each}
+			</div>
+		{:else}
+			<!-- Grouped Sections -->
+			<div class="grouped-container">
+				{#each groupedItems() as [groupName, groupList]}
+					<section class="group-section">
+						<div class="group-header">
+							<h3>{groupName}</h3>
+							<span class="group-count">{groupList.length}</span>
+						</div>
+
+						<div class="mobwork-list">
+							{#each groupList as item (item.id)}
+								<article class="mobwork-row">
+									<div class="row-thumb" onclick={() => playItem(item.id)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && playItem(item.id)}>
+										{#if item.thumbnail}
+											<img src={item.thumbnail} alt={item.title} loading="lazy" />
+										{:else}
+											<div class="no-thumb">▶</div>
+										{/if}
+										<div class="play-overlay">▶</div>
+									</div>
+
+									<div class="row-info">
+										<div class="row-header">
+											<h4 class="row-title" onclick={() => playItem(item.id)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && playItem(item.id)}>
+												{item.title || item.work || 'Anotación'}
+											</h4>
+											{#if item.year}<span class="row-year">({item.year})</span>{/if}
+										</div>
+
+										<div class="row-meta">
+											{#if item.composer}<span class="meta-item">{item.composer}</span>{/if}
+											{#if item.shapeCount != null}
+												<span class="meta-badge">{item.shapeCount} marcas</span>
+											{/if}
+										</div>
+									</div>
+
+									<div class="row-actions">
+										<button type="button" class="btn btn-sm btn-play" onclick={() => playItem(item.id)}>▶</button>
+										<a href="/annotate/{item.id}" class="btn btn-sm btn-subtle">✎</a>
+										<button type="button" class="btn btn-sm btn-subtle" onclick={() => copyEmbed(item.id)}>📋</button>
+									</div>
+								</article>
+							{/each}
+						</div>
+					</section>
+				{/each}
+			</div>
+		{/if}
+	</main>
+
+	<!-- Player Modal -->
+	{#if playingId}
+		<div class="modal-backdrop" onclick={closePlayer} role="dialog" aria-modal="true">
+			<div class="player-modal" onclick={(e) => e.stopPropagation()}>
+				<div class="player-modal-head">
+					<div class="modal-title">
+						<strong>{playingAnnotation?.title || playingAnnotation?.work || 'Reproductor'}</strong>
+						{#if playingAnnotation?.composer}
+							<small>· {playingAnnotation.composer}</small>
+						{/if}
+					</div>
+					<div class="modal-controls">
+						<a href="/annotate/{playingId}" class="btn btn-xs btn-subtle">✎ Editar anotación</a>
+						<button type="button" class="btn btn-xs btn-subtle" onclick={() => copyEmbed(playingId!)}>📋 Copiar iframe</button>
+						<button type="button" class="btn-close" onclick={closePlayer}>×</button>
 					</div>
 				</div>
-				<div class="modal-footer">
-					Type commands directly into the Query Editor and press Enter.
+
+				<div class="player-embed-mount">
+					<!-- svelte-ignore element_invalid_self_closing_tag -->
+					<glip-player
+						bind:this={playerModalEl}
+						autoplay=""
+						bridge=""
+						meta="bottom"
+					>
+						{#if playingAnnotation}
+							<script type="application/json">
+								{@html JSON.stringify(playingAnnotation).replace(/</g, '\\u003c')}
+							</script>
+						{/if}
+					</glip-player>
 				</div>
+
+				{#if playingAnnotation?.notes}
+					<div class="player-notes">
+						<strong>Notas pedagógicas:</strong>
+						<p>{playingAnnotation.notes}</p>
+					</div>
+				{/if}
 			</div>
 		</div>
 	{/if}
 
-	<div class="blender-layout" style="grid-template-columns: 300px 250px 1fr {showMetadata ? '350px' : '0px'}">
-		<!-- Panel 1: Query -->
-		<div class="panel query-panel">
-			<div class="panel-header">
-				QUERY EDITOR
-			</div>
-			<div class="panel-content">
-				<textarea bind:value={query} spellcheck="false" placeholder="Enter GLINO query or GLIP command..."></textarea>
-				<button onclick={runQuery} disabled={loading} class="run-btn">
-					{loading ? 'RUNNING...' : 'RUN (CMD+ENTER)'}
-				</button>
-				<DropZone />
-			</div>
-		</div>
-
-		<!-- Panel 2: Results -->
-		<div class="panel results-panel">
-			<div class="panel-header" style="padding: 0;">
-				<input 
-					type="text" 
-					class="header-search" 
-					placeholder="SEARCH ETA..." 
-					bind:value={resultsSearch} 
-					style="width: 100%; border: none; background: transparent; height: 100%;"
-				/>
-			</div>
-			<div class="panel-content">
-				{#if filteredResults.length === 0}
-					<div class="empty">NO RESULTS</div>
-				{:else}
-					<div class="results-list">
-						{#each filteredResults as tae}
-							<button 
-								class="tae-item" 
-								class:selected={selectedTae?.id === tae.id}
-								onmouseenter={() => selectTaeById(tae.id)}
-								onmouseleave={() => audioEngine.stopTae()}
-								onclick={() => selectTaeById(tae.id)}
-							>
-								<div class="tae-info">
-									<span class="name">{tae.audio}</span>
-									<span class="id">{tae.id.slice(0,8)}</span>
-								</div>
-								<div class="mini-wave">
-									<Waveform audioFile={tae.audio} height={20} color="#555" />
-								</div>
-							</button>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		</div>
-
-		<!-- Panel 3: Viewers -->
-		<div class="viewers-stack">
-			<div class="panel vector-panel">
-				<div class="panel-header">VECTOR SPACE NAVIGATOR</div>
-				<div class="panel-content" style="padding: 0;">
-					<VectorSpace 
-						points={allPoints} 
-						selectedId={selectedTae?.id} 
-						onSelect={selectTaeById} 
-					/>
-				</div>
-			</div>
-
-			<div class="panel glyph-panel">
-				<div class="panel-header">GLYPH VIEWER</div>
-				<div class="panel-content glyph-container">
-					{#if selectedTae}
-						{@html selectedTae.symbol}
-					{:else}
-						<div class="empty">SELECT A TAE</div>
-					{/if}
-				</div>
-			</div>
-
-			<div class="panel main-panel">
-				<div class="panel-header">
-					<div class="main-tabs">
-						<button class:active={activeMainTab === 'timeline'} onclick={() => activeMainTab = 'timeline'}>TIMELINE</button>
-						<button class:active={activeMainTab === 'analysis'} onclick={() => activeMainTab = 'analysis'}>ANALYSIS</button>
-					</div>
-					<div class="header-actions">
-						{#if activeMainTab === 'timeline'}
-							<button class="header-btn" onclick={() => audioEngine.playTimeline(timeline)}>PLAY</button>
-						{/if}
-					</div>
-				</div>
-				<div class="panel-content" style="padding: 0;">
-					{#if activeMainTab === 'timeline'}
-						<div class="timeline-viz">
-							{#each timeline as event}
-								<div class="event" style="left: {event.start * 100}px; width: {event.duration * 100}px"></div>
-							{/each}
-						</div>
-					{:else}
-						<AnalysisViewer audioFile={selectedTae?.audio} />
-					{/if}
-				</div>
-			</div>
-		</div>
-
-		<!-- Panel 4: Metadata -->
-		<div class="panel metadata-panel" style="display: {showMetadata ? 'flex' : 'none'}">
-			<div class="panel-header">TAE INSPECTOR</div>
-			<div class="panel-content">
-				{#if selectedTae}
-					<div class="inspector">
-						<div class="wave-preview">
-							<Waveform audioFile={selectedTae.audio} height={60} color="var(--accent)" />
-						</div>
-						
-						<details open class="analysis-details">
-							<summary>EMERGING ANALYSIS</summary>
-							{#if selectedTae.descriptors}
-								{@const d = selectedTae.descriptors}
-								<div class="emergent-bars">
-
-									<div class="ebar-row">
-										<span class="ebar-label">CENTROID</span>
-										<div class="ebar-track">
-											<div class="ebar-fill centroid-fill"
-												style="width:{Math.min(100,(d.desc_centroid||0)/8000*100)}%"></div>
-										</div>
-										<span class="ebar-val">{d.desc_centroid != null ? d.desc_centroid.toFixed(0)+' Hz' : '—'}</span>
-									</div>
-
-									<div class="ebar-row">
-										<span class="ebar-label">RMS</span>
-										<div class="ebar-track">
-											<div class="ebar-fill rms-fill"
-												style="width:{Math.min(100,(d.desc_rms||0)*100*8)}%"></div>
-										</div>
-										<span class="ebar-val">{d.desc_rms != null ? d.desc_rms.toFixed(4) : '—'}</span>
-									</div>
-
-									<div class="ebar-row">
-										<span class="ebar-label">F0</span>
-										<div class="ebar-track">
-											<div class="ebar-fill f0-fill"
-												style="width:{Math.min(100,(d.desc_f0||0)/2000*100)}%"></div>
-										</div>
-										<span class="ebar-val">{d.desc_f0 != null && d.desc_f0 > 0 ? d.desc_f0.toFixed(1)+' Hz' : '—'}</span>
-									</div>
-
-									<div class="ebar-row">
-										<span class="ebar-label">DOM F</span>
-										<div class="ebar-track">
-											<div class="ebar-fill domf-fill"
-												style="width:{Math.min(100,(d.desc_dom_freq||0)/4000*100)}%"></div>
-										</div>
-										<span class="ebar-val">{d.desc_dom_freq != null && d.desc_dom_freq > 0 ? d.desc_dom_freq.toFixed(1)+' Hz' : '—'}</span>
-									</div>
-
-									<div class="ebar-row">
-										<span class="ebar-label">VOICED</span>
-										<div class="ebar-track">
-											<div class="ebar-fill voiced-fill"
-												style="width:{Math.min(100,(d.desc_voiced_prob||0)*100)}%"></div>
-										</div>
-										<span class="ebar-val">{d.desc_voiced_prob != null ? d.desc_voiced_prob.toFixed(2) : '—'}</span>
-									</div>
-
-									<div class="ebar-row">
-										<span class="ebar-label">ZCR</span>
-										<div class="ebar-track">
-											<div class="ebar-fill zcr-fill"
-												style="width:{Math.min(100,(d.desc_zcr||0)*100*20)}%"></div>
-										</div>
-										<span class="ebar-val">{d.desc_zcr != null ? d.desc_zcr.toFixed(4) : '—'}</span>
-									</div>
-
-									<div class="ebar-row">
-										<span class="ebar-label">FLATNESS</span>
-										<div class="ebar-track">
-											<div class="ebar-fill flat-fill"
-												style="width:{Math.min(100,(d.desc_flatness||0)*100)}%"></div>
-										</div>
-										<span class="ebar-val">{d.desc_flatness != null ? d.desc_flatness.toFixed(4) : '—'}</span>
-									</div>
-
-									{#if d.desc_centroid != null}
-										{@const isKiki = d.desc_centroid > 3000 || (d.desc_flatness||0) > 0.3}
-										<div class="kiki-bouba-tag" class:kiki={isKiki} class:bouba={!isKiki}>
-											{isKiki ? 'KIKI' : 'BOUBA'} — {isKiki ? 'bright · noisy · angular' : 'dark · harmonic · smooth'}
-										</div>
-									{/if}
-								</div>
-							{:else}
-								<div class="empty" style="padding: 15px;">RUN glip.librosa TO ANALYZE</div>
-							{/if}
-						</details>
-
-						{#each metadataGroups as group}
-							<details open>
-								<summary>{group.label}</summary>
-								<div class="input-group">
-									{#each group.fields as field}
-										<div class="field">
-											<label>
-												<span>{field.replace('_', ' ')}</span>
-												<input bind:value={selectedTae[field]} oninput={saveMetadata} />
-											</label>
-										</div>
-									{/each}
-								</div>
-							</details>
-						{/each}
-					</div>
-				{:else}
-					<div class="empty">NO SELECTION</div>
-				{/if}
-			</div>
-		</div>
-	</div>
-
-	<!-- Status bar — spans full width below the grid -->
-	<div class="status-bar" class:running={statusKind==='running'} class:ok={statusKind==='ok'} class:err={statusKind==='error'}>
-		<span class="status-dot"></span>
-		<span class="status-text">{statusMsg}</span>
-	</div>
+	<!-- Toast alert -->
+	{#if toastMsg}
+		<div class="toast-popup">{toastMsg}</div>
+	{/if}
 </div>
 
 <style>
-	.app-shell {
-		display: flex;
-		flex-direction: column;
-		height: 100vh;
-		width: 100vw;
-		background: #000;
-		overflow: hidden;
-		position: relative;
+	.mobwork-page {
+		min-height: 100vh;
+		background: #f1efe6;
+		color: #1c1b18;
+		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+		padding-bottom: 60px;
 	}
 
-	.modal-backdrop {
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-		bottom: 0;
-		background: rgba(0, 0, 0, 0.85);
-		display: flex;
-		justify-content: center;
-		align-items: center;
-		z-index: 1000;
-		backdrop-filter: blur(4px);
+	@media (prefers-color-scheme: dark) {
+		.mobwork-page {
+			background: #12151b;
+			color: #e5e7eb;
+		}
 	}
 
-	.modal {
-		background: #0a0a0a;
-		border: 1px solid #222;
-		width: 600px;
-		max-width: 90vw;
-		max-height: 80vh;
-		display: flex;
-		flex-direction: column;
-		box-shadow: 0 20px 50px rgba(0,0,0,0.5);
-	}
-
-	.modal-header {
-		padding: 10px 15px;
-		background: #111;
-		border-bottom: 1px solid #222;
+	.top-nav {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		font-size: 11px;
-		font-weight: bold;
-		letter-spacing: 1px;
+		padding: 16px 24px;
+		background: rgba(255, 255, 255, 0.7);
+		backdrop-filter: blur(8px);
+		border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+		position: sticky;
+		top: 0;
+		z-index: 10;
 	}
 
-	.modal-header button {
+	@media (prefers-color-scheme: dark) {
+		.top-nav {
+			background: rgba(18, 21, 27, 0.85);
+			border-bottom-color: rgba(255, 255, 255, 0.08);
+		}
+	}
+
+	.brand {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+	}
+
+	.brand h1 {
+		margin: 0;
+		font-size: 22px;
+		letter-spacing: -0.5px;
+		font-weight: 800;
+	}
+
+	.brand-sub {
+		font-size: 13px;
+		opacity: 0.6;
+	}
+
+	.nav-actions {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.filter-section {
+		max-width: 960px;
+		margin: 20px auto 0;
+		padding: 0 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.search-box {
+		position: relative;
+		display: flex;
+		align-items: center;
+	}
+
+	.search-icon {
+		position: absolute;
+		left: 14px;
+		width: 18px;
+		height: 18px;
+		opacity: 0.4;
+		pointer-events: none;
+	}
+
+	.search-box input {
+		width: 100%;
+		padding: 12px 38px 12px 42px;
+		border-radius: 10px;
+		border: 1px solid rgba(0, 0, 0, 0.12);
+		background: #fff;
+		font-size: 14px;
+		color: inherit;
+		box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+		transition: border-color 0.2s, box-shadow 0.2s;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.search-box input {
+			background: #1a1e27;
+			border-color: rgba(255, 255, 255, 0.1);
+		}
+	}
+
+	.search-box input:focus {
+		outline: none;
+		border-color: #2563eb;
+		box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+	}
+
+	.clear-btn {
+		position: absolute;
+		right: 12px;
 		background: transparent;
 		border: none;
-		color: #666;
-		font-size: 20px;
+		font-size: 18px;
+		cursor: pointer;
+		opacity: 0.5;
+	}
+
+	.scope-tabs {
+		display: flex;
+		gap: 6px;
+		overflow-x: auto;
+		padding-bottom: 4px;
+	}
+
+	.tab-btn {
+		background: transparent;
+		border: 1px solid transparent;
+		padding: 6px 14px;
+		border-radius: 20px;
+		font-size: 13px;
+		font-weight: 500;
+		color: inherit;
+		cursor: pointer;
+		opacity: 0.7;
+		white-space: nowrap;
+		transition: all 0.15s;
+	}
+
+	.tab-btn:hover {
+		opacity: 1;
+		background: rgba(0, 0, 0, 0.05);
+	}
+
+	.tab-btn.active {
+		opacity: 1;
+		background: #2563eb;
+		color: #fff;
+	}
+
+	.tags-scroller {
+		display: flex;
+		gap: 6px;
+		overflow-x: auto;
+		padding: 4px 0;
+	}
+
+	.tag-chip {
+		background: rgba(0, 0, 0, 0.05);
+		border: 1px solid rgba(0, 0, 0, 0.06);
+		padding: 3px 10px;
+		border-radius: 14px;
+		font-size: 12px;
+		color: inherit;
+		cursor: pointer;
+		white-space: nowrap;
+		transition: all 0.15s;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.tag-chip {
+			background: rgba(255, 255, 255, 0.08);
+			border-color: rgba(255, 255, 255, 0.08);
+		}
+	}
+
+	.tag-chip.active {
+		background: #10b981;
+		color: #fff;
+		border-color: #10b981;
+	}
+
+	.content-body {
+		max-width: 960px;
+		margin: 16px auto 0;
+		padding: 0 16px;
+	}
+
+	.mobwork-list {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+
+	.mobwork-row {
+		display: grid;
+		grid-template-columns: 140px 1fr auto;
+		gap: 16px;
+		align-items: center;
+		padding: 12px;
+		background: #fff;
+		border: 1px solid rgba(0, 0, 0, 0.08);
+		border-radius: 10px;
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+		transition: transform 0.1s, box-shadow 0.1s;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.mobwork-row {
+			background: #1a1e27;
+			border-color: rgba(255, 255, 255, 0.06);
+		}
+	}
+
+	.mobwork-row:hover {
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+	}
+
+	@media (max-width: 680px) {
+		.mobwork-row {
+			grid-template-columns: 110px 1fr;
+			grid-template-areas:
+				'thumb info'
+				'actions actions';
+			gap: 10px;
+		}
+
+		.row-thumb {
+			grid-area: thumb;
+		}
+		.row-info {
+			grid-area: info;
+		}
+		.row-actions {
+			grid-area: actions;
+			justify-content: flex-end;
+			border-top: 1px solid rgba(0, 0, 0, 0.05);
+			padding-top: 8px;
+		}
+	}
+
+	.row-thumb {
+		position: relative;
+		width: 100%;
+		aspect-ratio: 16 / 9;
+		background: #000;
+		border-radius: 6px;
+		overflow: hidden;
 		cursor: pointer;
 	}
 
-	.modal-body {
-		padding: 20px;
-		overflow-y: auto;
-		display: flex;
-		flex-direction: column;
-		gap: 25px;
-	}
-
-	.help-section h3 {
-		font-size: 10px;
-		color: #555;
-		margin-bottom: 12px;
-		border-bottom: 1px solid #1a1a1a;
-		padding-bottom: 4px;
-		text-transform: uppercase;
-		letter-spacing: 1.5px;
-	}
-
-	.cmd-list { display: flex; flex-direction: column; gap: 10px; }
-
-	.cmd-item { display: flex; flex-direction: column; gap: 4px; }
-	.cmd-item code { color: var(--accent); font-size: 11px; font-weight: bold; }
-	.cmd-item span { font-size: 10px; color: #888; line-height: 1.4; }
-
-	.shortcut-grid {
-		display: grid;
-		grid-template-columns: 1fr auto;
-		gap: 10px;
-		font-size: 10px;
-		color: #888;
-	}
-
-	.shortcut-grid code {
-		color: #fff;
-		background: #222;
-		padding: 2px 6px;
-		border-radius: 3px;
-		font-family: monospace;
-	}
-
-	.modal-footer {
-		padding: 15px;
-		background: #050505;
-		border-top: 1px solid #111;
-		font-size: 9px;
-		color: #444;
-		text-align: center;
-		font-style: italic;
-	}
-
-	/* ── Status bar ── */
-	.status-bar {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		height: 20px;
-		padding: 0 12px;
-		background: #050505;
-		border-top: 1px solid #1a1a1a;
-		font-size: 9px;
-		color: #444;
-		letter-spacing: 0.08em;
-		flex-shrink: 0;
-		transition: color 0.3s;
-	}
-	.status-bar.ok    { color: #00ff88; }
-	.status-bar.err   { color: #ff4444; }
-	.status-bar.running { color: #ffaa00; }
-
-	.status-dot {
-		width: 5px; height: 5px;
-		border-radius: 50%;
-		background: currentColor;
-		flex-shrink: 0;
-	}
-	.status-bar.running .status-dot {
-		animation: pulse 1s ease-in-out infinite;
-	}
-	@keyframes pulse {
-		0%, 100% { opacity: 1; }
-		50%       { opacity: 0.2; }
-	}
-	.status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-	.blender-layout {
-		flex: 1;
-		display: grid;
+	.row-thumb img {
 		width: 100%;
 		height: 100%;
-		gap: 2px;
-		background: var(--border);
-		transition: grid-template-columns 0.2s ease;
+		object-fit: cover;
 	}
 
-	.panel {
-		background: var(--bg);
-		display: flex;
-		flex-direction: column;
-		overflow: hidden;
-	}
-
-	.panel-header {
-		height: 24px;
-		background: var(--surface);
-		font-size: 10px;
-		padding: 0 10px;
+	.no-thumb {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		color: var(--text-dim);
-		border-bottom: 1px solid var(--border);
-		text-transform: uppercase;
+		justify-content: center;
+		height: 100%;
+		color: #999;
+		font-size: 20px;
 	}
 
-	.header-actions { display: flex; gap: 5px; }
-
-	.header-search {
-		background: #111;
-		border: 1px solid #333;
-		color: var(--accent);
-		font-size: 8px;
-		padding: 2px 6px;
-		width: 100px;
-		outline: none;
-	}
-
-	.header-search:focus { border-color: var(--accent); }
-
-	.panel-content {
-		flex: 1;
-		padding: 10px;
+	.play-overlay {
+		position: absolute;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.35);
 		display: flex;
-		flex-direction: column;
-		overflow-y: auto;
-		position: relative;
+		align-items: center;
+		justify-content: center;
+		color: #fff;
+		font-size: 20px;
+		opacity: 0;
+		transition: opacity 0.2s;
 	}
 
-	textarea {
-		width: 100%;
-		flex: 1;
-		background: transparent;
-		color: var(--accent);
-		border: none;
-		resize: none;
-		font-family: inherit;
-		outline: none;
+	.row-thumb:hover .play-overlay {
+		opacity: 1;
 	}
 
-	.run-btn { width: 100%; margin: 10px 0; }
-
-	.viewers-stack {
-		display: grid;
-		grid-template-rows: 1fr 150px 200px;
-		gap: 2px;
+	.clip-pill {
+		position: absolute;
+		bottom: 4px;
+		left: 4px;
+		background: rgba(0, 0, 0, 0.75);
+		color: #fff;
+		font-size: 10px;
+		font-family: monospace;
+		padding: 2px 6px;
+		border-radius: 3px;
 	}
 
-	.tae-item {
-		width: 100%;
-		padding: 8px;
-		background: var(--surface);
-		border: none;
-		border-left: 2px solid transparent;
-		margin-bottom: 4px;
-		cursor: pointer;
-		text-align: left;
-		color: var(--text);
-		font-family: inherit;
+	.row-info {
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
-	}
-
-	.tae-item.selected {
-		background: #222;
-		border-left-color: var(--accent);
-	}
-
-	.tae-info {
-		display: flex;
-		justify-content: space-between;
-		font-size: 10px;
-	}
-
-	.mini-wave { height: 20px; background: #111; }
-
-	.glyph-container {
-		display: flex;
-		justify-content: center;
-		align-items: center;
-		background: #050505;
-	}
-
-	.glyph-container :global(svg) { width: 100px; height: 100px; }
-
-	.timeline-viz {
-		height: 100%;
-		background: #050505;
-		position: relative;
-		border: 1px dashed #222;
-	}
-
-	.event {
-		position: absolute;
-		top: 20px;
-		height: 40px;
-		background: var(--accent);
-		opacity: 0.3;
-		border: 1px solid var(--accent);
-	}
-
-	.inspector {
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-
-	.wave-preview {
-		height: 60px;
-		background: #000;
-		border: 1px solid #222;
-		margin-bottom: 10px;
-	}
-
-	details {
-		margin-bottom: 5px;
-		background: #111;
-		border: 1px solid #222;
-	}
-
-	details.analysis-details {
-		background: #161e1a;
-		border-color: #2a3a2a;
-	}
-
-	summary {
-		padding: 5px 10px;
-		font-size: 9px;
-		background: #1a1a1a;
-		cursor: pointer;
-		color: #888;
-		text-transform: uppercase;
-	}
-
-	details.analysis-details summary {
-		background: #1a2a1a;
-		color: #9a9;
-	}
-
-	.input-group { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
-
-	.field { display: flex; flex-direction: column; gap: 2px; }
-
-	label { font-size: 8px; color: #555; text-transform: uppercase; }
-
-	input {
-		background: #050505;
-		border: 1px solid #222;
-		color: #eee;
-		padding: 4px 8px;
-		font-family: inherit;
-		font-size: 10px;
-		outline: none;
-	}
-
-	input:focus { border-color: var(--accent); }
-
-	.empty {
-		color: #444;
-		font-size: 10px;
-		display: flex;
-		justify-content: center;
-		align-items: center;
-		height: 100%;
-	}
-
-	.header-btn {
-		background: #333;
-		border: none;
-		color: #fff;
-		font-size: 8px;
-		padding: 2px 6px;
-		cursor: pointer;
-	}
-
-	.main-tabs { display: flex; gap: 10px; }
-	.main-tabs button {
-		background: transparent;
-		border: none;
-		color: #666;
-		font-size: 10px;
-		cursor: pointer;
-	}
-	.main-tabs button.active { color: #fff; }
-
-	/* ── EMERGING ANALYSIS bars ── */
-	.emergent-bars {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		padding: 10px;
-	}
-
-	.ebar-row {
-		display: grid;
-		grid-template-columns: 58px 1fr 56px;
-		align-items: center;
-		gap: 6px;
-	}
-
-	.ebar-label {
-		font-size: 7px;
-		color: #555;
-		letter-spacing: 0.06em;
-		text-align: right;
-	}
-
-	.ebar-track {
-		height: 3px;
-		background: #111;
 		overflow: hidden;
 	}
 
-	.ebar-fill {
-		height: 100%;
-		min-width: 1px;
-		transition: width 0.5s ease;
+	.row-header {
+		display: flex;
+		align-items: baseline;
+		gap: 6px;
 	}
 
-	.centroid-fill { background: #00ff88; }
-	.rms-fill      { background: #ff6644; }
-	.f0-fill       { background: #00ccff; }
-	.domf-fill     { background: #ff88cc; }  /* piptrack dominant — works for inharmonics */
-	.voiced-fill   { background: #88ffcc; }  /* pyin voiced probability */
-	.zcr-fill      { background: #cc88ff; }
-	.flat-fill     { background: #ffaa00; }
-
-	.ebar-val {
-		font-size: 7px;
-		color: #444;
-		text-align: right;
-		font-variant-numeric: tabular-nums;
+	.row-title {
+		margin: 0;
+		font-size: 15px;
+		font-weight: 700;
+		cursor: pointer;
+		text-overflow: ellipsis;
+		overflow: hidden;
 		white-space: nowrap;
 	}
 
-	.kiki-bouba-tag {
-		margin-top: 4px;
-		padding: 4px 8px;
-		font-size: 8px;
-		letter-spacing: 0.08em;
-		border: 1px solid #1a1a1a;
-		color: #555;
+	.row-title:hover {
+		color: #2563eb;
 	}
 
-	.kiki-bouba-tag.kiki {
-		border-color: #2a1a1a;
-		color: #ff6644;
-		background: #100808;
+	.row-year {
+		font-size: 12px;
+		opacity: 0.6;
 	}
 
-	.kiki-bouba-tag.bouba {
-		border-color: #1a2a1a;
-		color: #00ff88;
-		background: #080f08;
+	.row-meta {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px;
+		font-size: 12px;
+		opacity: 0.85;
+	}
+
+	.meta-badge {
+		background: rgba(37, 99, 235, 0.12);
+		color: #2563eb;
+		padding: 2px 6px;
+		border-radius: 4px;
+		font-size: 11px;
+		font-weight: 600;
+	}
+
+	.provider-pill {
+		background: rgba(0, 0, 0, 0.05);
+		padding: 2px 6px;
+		border-radius: 4px;
+		font-size: 10px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		opacity: 0.7;
+	}
+
+	.row-tags {
+		display: flex;
+		gap: 4px;
+		flex-wrap: wrap;
+		margin-top: 2px;
+	}
+
+	.tag-pill {
+		font-size: 11px;
+		opacity: 0.65;
+		cursor: pointer;
+	}
+
+	.tag-pill:hover {
+		opacity: 1;
+		text-decoration: underline;
+	}
+
+	.row-actions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	/* Grouped Layout */
+	.grouped-container {
+		display: flex;
+		flex-direction: column;
+		gap: 24px;
+	}
+
+	.group-section {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.group-header {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		border-bottom: 2px solid rgba(0, 0, 0, 0.06);
+		padding-bottom: 6px;
+	}
+
+	.group-header h3 {
+		margin: 0;
+		font-size: 16px;
+		font-weight: 700;
+	}
+
+	.group-count {
+		font-size: 12px;
+		opacity: 0.5;
+	}
+
+	/* Empty state */
+	.empty-state {
+		text-align: center;
+		padding: 60px 20px;
+		background: #fff;
+		border-radius: 12px;
+		border: 1px dashed rgba(0, 0, 0, 0.15);
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 12px;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.empty-state {
+			background: #1a1e27;
+			border-color: rgba(255, 255, 255, 0.1);
+		}
+	}
+
+	.empty-icon {
+		font-size: 40px;
+	}
+
+	.empty-state h2 {
+		margin: 0;
+		font-size: 18px;
+	}
+
+	.empty-state p {
+		margin: 0;
+		font-size: 13px;
+		opacity: 0.7;
+		max-width: 400px;
+	}
+
+	/* Buttons */
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 13px;
+		font-weight: 600;
+		padding: 8px 16px;
+		border-radius: 8px;
+		border: none;
+		text-decoration: none;
+		cursor: pointer;
+		transition: all 0.15s;
+	}
+
+	.btn-primary {
+		background: #2563eb;
+		color: #fff;
+	}
+	.btn-primary:hover {
+		background: #1d4ed8;
+	}
+
+	.btn-sm {
+		padding: 5px 10px;
+		font-size: 12px;
+		border-radius: 6px;
+	}
+	.btn-xs {
+		padding: 3px 8px;
+		font-size: 11px;
+		border-radius: 4px;
+	}
+
+	.btn-play {
+		background: #10b981;
+		color: #fff;
+	}
+	.btn-play:hover {
+		background: #059669;
+	}
+
+	.btn-subtle {
+		background: rgba(0, 0, 0, 0.05);
+		color: inherit;
+	}
+	.btn-subtle:hover {
+		background: rgba(0, 0, 0, 0.1);
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.btn-subtle {
+			background: rgba(255, 255, 255, 0.08);
+		}
+		.btn-subtle:hover {
+			background: rgba(255, 255, 255, 0.14);
+		}
+	}
+
+	.btn-danger-link {
+		background: transparent;
+		color: #ef4444;
+		opacity: 0.7;
+	}
+	.btn-danger-link:hover {
+		opacity: 1;
+		background: rgba(239, 68, 68, 0.1);
+	}
+
+	/* Player Modal */
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.85);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 100;
+		padding: 16px;
+	}
+
+	.player-modal {
+		background: #14171d;
+		color: #fff;
+		border-radius: 12px;
+		width: 100%;
+		max-width: 900px;
+		overflow: hidden;
+		box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+		display: flex;
+		flex-direction: column;
+	}
+
+	.player-modal-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 12px 18px;
+		background: #1e222b;
+		border-bottom: 1px solid #2a2f3b;
+	}
+
+	.modal-title {
+		font-size: 15px;
+	}
+	.modal-title small {
+		opacity: 0.7;
+	}
+
+	.modal-controls {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.btn-close {
+		background: transparent;
+		border: none;
+		color: #fff;
+		font-size: 22px;
+		line-height: 1;
+		cursor: pointer;
+		opacity: 0.7;
+		padding: 0 6px;
+	}
+	.btn-close:hover {
+		opacity: 1;
+	}
+
+	.player-embed-mount {
+		width: 100%;
+		background: #000;
+	}
+
+	glip-player {
+		width: 100%;
+		max-height: 70vh;
+	}
+
+	.player-notes {
+		padding: 14px 18px;
+		background: #181c24;
+		border-top: 1px solid #2a2f3b;
+		font-size: 13px;
+		line-height: 1.5;
+	}
+
+	.player-notes p {
+		margin: 4px 0 0;
+		opacity: 0.85;
+	}
+
+	/* Toast */
+	.toast-popup {
+		position: fixed;
+		bottom: 24px;
+		left: 50%;
+		transform: translateX(-50%);
+		background: #1f2937;
+		color: #fff;
+		padding: 10px 18px;
+		border-radius: 20px;
+		font-size: 13px;
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+		z-index: 200;
+		animation: toastFade 0.2s ease-out;
+	}
+
+	@keyframes toastFade {
+		from {
+			opacity: 0;
+			transform: translate(-50%, 10px);
+		}
+		to {
+			opacity: 1;
+			transform: translate(-50%, 0);
+		}
 	}
 </style>

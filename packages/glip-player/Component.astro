@@ -1,0 +1,31 @@
+---
+/*
+  @zztt/glip-player — Astro wrapper around the <glip-player> custom element.
+  Renders the element (optionally with inline annotation JSON fetched
+  server-side by the host, e.g. musiki via its glip integration token) plus the
+  module script. All playback happens client-side.
+
+  `src` must be a same-origin path; the element refuses anything else with a
+  visible error (the check lives in the element so plain-HTML hosts get it too).
+*/
+export interface Props {
+  /** Same-origin path of the annotation JSON. */
+  src?: string;
+  /** Annotation object fetched server-side (takes precedence over src). */
+  annotation?: unknown;
+  meta?: 'none' | 'top' | 'bottom';
+  autoplay?: boolean;
+  loop?: boolean;
+}
+
+const { src, annotation, meta = 'top', autoplay = false, loop = false } = Astro.props;
+const inline = annotation == null ? null : JSON.stringify(annotation).replace(/</g, '\\u003c');
+---
+<glip-player src={inline ? undefined : src} meta={meta} autoplay={autoplay || undefined} loop={loop || undefined} muted={autoplay || undefined}>
+  {inline && <script type="application/json" set:html={inline} />}
+  <noscript>This annotated video needs JavaScript.</noscript>
+</glip-player>
+
+<script>
+  import './glip-player.js';
+</script>

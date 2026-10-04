@@ -1,0 +1,95 @@
+{
+	"v": 1,
+	"id": "demo-bach-fugue",
+	"title": "Fuga en Sol menor BWV 578 — Entrada del Sujeto",
+	"work": "Fuga en Sol menor BWV 578",
+	"composer": "Johann Sebastian Bach",
+	"year": 1707,
+	"tags": [
+		"contrapunto",
+		"organo",
+		"analisis",
+		"barroco"
+	],
+	"performer": "Ton Koopman",
+	"notes": "Ejemplo para clase: presentación del sujeto solista en la voz superior (0:00-0:15) y respuesta en dominante (0:15-0:30) con contrasujeto.",
+	"source": {
+		"provider": "youtube",
+		"id": "ddbxFi3-UO4",
+		"url": "https://www.youtube.com/watch?v=ddbxFi3-UO4",
+		"aspect": 1.7778,
+		"duration": 235
+	},
+	"clip": {
+		"in": 0,
+		"out": 35
+	},
+	"shapes": [
+		{
+			"id": "sh-sujeto",
+			"kind": "rect",
+			"t0": 1,
+			"t1": 15,
+			"color": "#ffd60a",
+			"width": 3,
+			"x": 0.08,
+			"y": 0.12,
+			"w": 0.84,
+			"h": 0.28,
+			"fill": true
+		},
+		{
+			"id": "sh-txt-1",
+			"kind": "text",
+			"t0": 1,
+			"t1": 15,
+			"color": "#ffd60a",
+			"width": 2,
+			"x": 0.1,
+			"y": 0.15,
+			"text": "Sujeto (Dux): Sol menor",
+			"size": 36,
+			"fill": true
+		},
+		{
+			"id": "sh-arrow-resp",
+			"kind": "arrow",
+			"t0": 15,
+			"t1": 32,
+			"color": "#0a84ff",
+			"width": 4,
+			"pts": [
+				[0.15, 0.45],
+				[0.35, 0.58]
+			]
+		},
+		{
+			"id": "sh-txt-2",
+			"kind": "text",
+			"t0": 15,
+			"t1": 32,
+			"color": "#0a84ff",
+			"width": 2,
+			"x": 0.12,
+			"y": 0.40,
+			"text": "Respuesta (Comes) en Re menor",
+			"size": 36,
+			"fill": true
+		},
+		{
+			"id": "sh-circ-cs",
+			"kind": "ellipse",
+			"t0": 16,
+			"t1": 32,
+			"color": "#ff3b30",
+			"width": 3,
+			"x": 0.45,
+			"y": 0.15,
+			"w": 0.48,
+			"h": 0.28,
+			"fill": false
+		}
+	],
+	"created": "2026-10-05T00:00:00.000Z",
+	"updated": "2026-10-05T00:00:00.000Z"
+}

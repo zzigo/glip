@@ -14,7 +14,7 @@
 # ─── CONFIGURA AQUÍ ──────────────────────────────────────────
 # set -g: global para que las funciones definidas abajo puedan leer estas variables
 set -g GLIP_VPS_USER "zz"
-set -g GLIP_VPS_HOST "vps2.zztt.org"
+set -g GLIP_VPS_HOST "46.225.154.68"
 set -g GLIP_REPO     "$HOME/dev/glip"   # fallback si no se auto-detecta
 set -g GLIP_LILYPOND "/Applications/Lilypond/lilypond-2.25.80/bin/lilypond"
 
@@ -100,8 +100,14 @@ function glip-dev
         return 1
     end
 
-    echo "[glip] frontend → http://localhost:5174"
     cd "$frontend"
+
+    if not test -d node_modules
+        echo "[glip] node_modules faltante — corriendo pnpm install..."
+        pnpm install
+    end
+
+    echo "[glip] frontend → http://localhost:5174"
     pnpm dev
 end
 

@@ -1,0 +1,20 @@
+{
+  "name": "@zztt/glip-player",
+  "version": "0.1.0",
+  "description": "glip annotator core + <glip-player> custom element (video + timed SVG overlays). Plain ESM, no build step.",
+  "type": "module",
+  "main": "glip-player.js",
+  "exports": {
+    ".": "./glip-player.js",
+    "./core": "./glip-core.js",
+    "./overlay": "./glip-overlay.js",
+    "./players": "./glip-players.js",
+    "./manifest.json": "./manifest.json"
+  },
+  "files": ["glip-core.js", "glip-overlay.js", "glip-players.js", "glip-player.js", "Component.astro", "manifest.json", "README.md"],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "license": "UNLICENSED",
+  "private": false
+}

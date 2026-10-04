@@ -1,6 +1,6 @@
 <script lang="ts">
 	let { audioFile } = $props();
-	let data = $state(null);
+	let data = $state<any>(null);
 	let loading = $state(false);
 	let activeTab = $state('hpss');
 
@@ -21,10 +21,10 @@
 		if (audioFile) loadAnalysis();
 	});
 
-	function getPath(arr, h, scale = 1) {
+	function getPath(arr: number[] | null, h: number, scale = 1) {
 		if (!arr) return "";
 		const max = Math.max(...arr.map(Math.abs)) || 1;
-		return arr.map((v, i) => `${i},${h/2 - (v/max)*(h/2)*scale}`).join(' L ');
+		return arr.map((v: number, i: number) => `${i},${h/2 - (v/max)*(h/2)*scale}`).join(' L ');
 	}
 </script>
 
@@ -64,7 +64,7 @@
 					<div class="spec-grid">
 						{#each data.spectrogram.slice(0, 64) as row}
 							<div class="spec-row">
-								{#each row.filter((_, i) => i % 2 === 0) as val}
+								{#each row.filter((_: any, i: number) => i % 2 === 0) as val}
 									<div class="spec-cell" style="background: rgba(0, 255, 136, {(val + 80) / 80})"></div>
 								{/each}
 							</div>

@@ -2,7 +2,7 @@
 	import { audioEngine } from './AudioEngine';
 	import { onMount } from 'svelte';
 
-	let { points = [], selectedId = null, onSelect = (id) => {} } = $props();
+	let { points = [], selectedId = null, onSelect = (_id: string) => {} } = $props<{ points?: any[], selectedId?: string | null, onSelect?: (id: string) => void }>();
 	
 	let canvas: HTMLCanvasElement;
 	let width = $state(400);
@@ -18,7 +18,7 @@
 
 	let availableDescriptors = $derived(() => {
 		if (points.length === 0) return ['dim0', 'dim1'];
-		const keys = Object.keys(points[0].descriptors || {});
+		const keys = Object.keys(points[0]?.descriptors || {});
 		return ['dim0', 'dim1', ...keys];
 	});
 
@@ -26,16 +26,16 @@
 	let offsetX = $state(0);
 	let offsetY = $state(0);
 
-	function getVal(p, axis) {
-		if (axis === 'dim0') return p.vector[0];
-		if (axis === 'dim1') return p.vector[1];
+	function getVal(p: any, axis: string) {
+		if (axis === 'dim0') return p.vector?.[0] ?? 0;
+		if (axis === 'dim1') return p.vector?.[1] ?? 0;
 		return p.descriptors?.[axis] || 0;
 	}
 
 	function getBounds() {
 		if (points.length === 0) return { minX: -1, maxX: 1, minY: -1, maxY: 1 };
-		let valsX = points.map(p => getVal(p, xAxis));
-		let valsY = points.map(p => getVal(p, yAxis));
+		let valsX = points.map((p: any) => getVal(p, xAxis));
+		let valsY = points.map((p: any) => getVal(p, yAxis));
 		return {
 			minX: Math.min(...valsX), maxX: Math.max(...valsX),
 			minY: Math.min(...valsY), maxY: Math.max(...valsY)
@@ -91,8 +91,8 @@
 		}
 
 		// Draw points
-		const proximitySounds = [];
-		points.forEach((p, idx) => {
+		const proximitySounds: Array<{ id: string, audio: string, gain: number }> = [];
+		points.forEach((p: any, idx: number) => {
 			const rx = getVal(p, xAxis);
 			const ry = getVal(p, yAxis);
 			const nx = (rx - minX) / rangeX;
@@ -193,9 +193,9 @@
 		const { minX, maxX, minY, maxY } = getBounds();
 		const rangeX = maxX - minX || 1;
 		const rangeY = maxY - minY || 1;
-		let closest = null;
+		let closest: any = null;
 		let minDist = 20;
-		points.forEach(p => {
+		points.forEach((p: any) => {
 			const nx = (getVal(p, xAxis) - minX) / rangeX;
 			const ny = 1 - (getVal(p, yAxis) - minY) / rangeY;
 			const px = toScreenX(nx);
@@ -206,7 +206,7 @@
 				closest = p;
 			}
 		});
-		if (closest) onSelect(closest.id, false);
+		if (closest) onSelect(closest.id);
 	}
 
 	$effect(() => {

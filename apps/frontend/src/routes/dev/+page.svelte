@@ -1,0 +1,889 @@
+<script lang="ts">
+	import DropZone from '$lib/DropZone.svelte';
+	import Waveform from '$lib/Waveform.svelte';
+	import VectorSpace from '$lib/VectorSpace.svelte';
+	import AnalysisViewer from '$lib/AnalysisViewer.svelte';
+	import { audioEngine } from '$lib/AudioEngine';
+	import { onMount } from 'svelte';
+	
+	let query = $state('list');
+	let results = $state<any[]>([]);
+	let timeline = $state<any[]>([]);
+	let allPoints = $state<any[]>([]);
+	let selectedTae = $state<any>(null);
+	let loading = $state(false);
+	let showMetadata = $state(true);
+	let showHelp = $state(false);
+	let activeMainTab = $state('timeline');
+
+	// Status bar — replaces all alert() calls
+	let statusMsg  = $state('READY');
+	let statusKind = $state('idle'); // 'idle' | 'running' | 'ok' | 'error'
+	let _statusTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function setStatus(msg: string, kind: 'idle' | 'running' | 'ok' | 'error' = 'ok', autoClear = true) {
+		statusMsg  = msg;
+		statusKind = kind;
+		if (_statusTimer) clearTimeout(_statusTimer);
+		if (autoClear && kind !== 'running') {
+			_statusTimer = setTimeout(() => { statusMsg = 'READY'; statusKind = 'idle'; }, 6000);
+		}
+	}
+
+	async function loadAllPoints() {
+		try {
+			const res = await fetch('/api/points');
+			allPoints = await res.json();
+		} catch (e) {
+			console.error("Failed to load points", e);
+		}
+	}
+
+	let resultsSearch = $state('');
+	let filteredResults = $derived(
+		results.filter(r => 
+			r.audio.toLowerCase().includes(resultsSearch.toLowerCase()) || 
+			r.id.toLowerCase().includes(resultsSearch.toLowerCase()) ||
+			(r.name && r.name.toLowerCase().includes(resultsSearch.toLowerCase()))
+		)
+	);
+
+	async function runQuery() {
+		const q = query.trim().toLowerCase();
+		
+		// Command Interceptor
+		if (q === 'glily.regen') return await regenGlyphs();
+		if (q === 'glip.librosa') return await runLibrosaUpdate();
+		if (q === 'glip.dump' || q === 'dump') return await dumpToObsidian();
+		if (q === 'glip.sync') return await syncFromObsidian();
+
+		loading = true;
+		try {
+			const response = await fetch(`/api/near?k=10&q=${encodeURIComponent(query)}`);
+			const data = await response.json();
+			results = data.results;
+			timeline = data.timeline;
+			if (results.length > 0 && !selectedTae) selectedTae = results[0];
+		} catch (e) {
+			console.error("Query failed", e);
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function saveMetadata() {
+		if (!selectedTae) return;
+		try {
+			await fetch('/api/metadata', {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					id: selectedTae.id,
+					metadata: selectedTae
+				})
+			});
+		} catch (e) {
+			console.error("Save failed", e);
+		}
+	}
+
+	async function dumpToObsidian() {
+		setStatus('DUMP · generating obsidian zip...', 'running', false);
+		try {
+			const res = await fetch('/api/dump', { method: 'GET' });
+			if (!res.ok) throw new Error("Dump failed");
+			const blob = await res.blob();
+			const url = window.URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `glip_dump_${new Date().toISOString().slice(0,10)}.zip`;
+			document.body.appendChild(a);
+			a.click();
+			window.URL.revokeObjectURL(url);
+			setStatus('DUMP · download started');
+		} catch (e: any) {
+			setStatus('DUMP · failed: ' + (e?.message || e), 'error');
+		}
+	}
+
+	async function syncFromObsidian() {
+		setStatus('SYNC · reading obsidian folder...', 'running', false);
+		try {
+			const res = await fetch('/api/sync', { method: 'POST' });
+			const data = await res.json();
+			setStatus(`SYNC · ${data.synced} records updated`);
+			runQuery();
+		} catch (e) {
+			setStatus('SYNC · failed', 'error');
+		}
+	}
+
+	async function regenGlyphs() {
+		setStatus('GLILY · regeneration started (background)', 'running', false);
+		try {
+			const res = await fetch('/api/glily/regen', { method: 'POST' });
+			const data = await res.json();
+			setStatus('GLILY · ' + (data.message || `${data.updated ?? '?'} glyphs queued`));
+			loadAllPoints();
+		} catch (e) {
+			setStatus('GLILY · failed', 'error');
+		}
+	}
+
+	async function runLibrosaUpdate() {
+		setStatus('LIBROSA · analyzing audio files — this may take a minute...', 'running', false);
+		try {
+			const res = await fetch('/api/glip/librosa', { method: 'POST' });
+			const data = await res.json();
+			setStatus(`LIBROSA · ${data.updated} records analyzed · centroid rms f0 dom_freq voiced_prob zcr flatness`);
+			loadAllPoints();
+		} catch (e: any) {
+			setStatus('LIBROSA · failed: ' + (e?.message || e), 'error');
+		}
+	}
+
+	function selectTaeById(id: string, play = true) {
+		const tae = results.find(r => r.id === id) || allPoints.find(p => p.id === id);
+		if (tae) {
+			selectedTae = tae;
+			if (play) audioEngine.playTae(tae.audio);
+		}
+	}
+
+	onMount(() => {
+		loadAllPoints();
+		const handleKey = (e: KeyboardEvent) => {
+			if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+				e.preventDefault();
+				runQuery();
+			}
+			if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === '|') {
+				e.preventDefault();
+				showMetadata = !showMetadata;
+			}
+			if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
+				e.preventDefault();
+				showHelp = !showHelp;
+			}
+		};
+		window.addEventListener('keydown', handleKey);
+		return () => window.removeEventListener('keydown', handleKey);
+	});
+
+	const metadataGroups = [
+		{ label: 'Identity', fields: ['name', 'type', 'instrument', 'performer'] },
+		{ label: 'Acoustic Analysis', fields: ['desc_centroid', 'desc_f0', 'desc_harmonicity', 'desc_rms', 'desc_zcr', 'desc_flatness', 'desc_bandwidth'] },
+		{ label: 'Notation', fields: ['glily', 'glily_expr', 'lilypond_vars'] },
+		{ label: 'MOAIE Mapping', fields: ['moaie_material', 'moaie_object', 'moaie_agent', 'moaie_interaction', 'moaie_environment'] },
+		{ label: 'Relational', fields: ['related_tae', 'family', 'tags'] }
+	];
+</script>
+
+<div class="app-shell">
+	{#if showHelp}
+		<div class="modal-backdrop" onclick={() => showHelp = false}>
+			<div class="modal help-modal" onclick={(e) => e.stopPropagation()}>
+				<div class="modal-header">
+					<span>GLIP SYSTEM HELP <small style="color: #444; margin-left: 8px;">#797bb47</small></span>
+					<button onclick={() => showHelp = false}>&times;</button>
+				</div>
+				<div class="modal-body">
+					<div class="help-section">
+						<h3>GLIP COMMANDS</h3>
+						<div class="cmd-list">
+							<div class="cmd-item">
+								<code>list</code>
+								<span>List all available TAEs in the collection.</span>
+							</div>
+							<div class="cmd-item">
+								<code>glip.dump</code>
+								<span>Download a ZIP containing Markdown notes of all TAEs for Obsidian.</span>
+							</div>
+							<div class="cmd-item">
+								<code>glip.sync</code>
+								<span>Sync metadata from Obsidian files back to the database.</span>
+							</div>
+						</div>
+					</div>
+
+					<div class="help-section">
+						<h3>GLILY COMMANDS</h3>
+						<div class="cmd-list">
+							<div class="cmd-item">
+								<code>glily.regen</code>
+								<span>Regenerate SVG glyphs (Kiki/Bouba heuristic) and sync to notes.</span>
+							</div>
+						</div>
+					</div>
+
+					<div class="help-section">
+						<h3>AUDIO ANALYSIS</h3>
+						<div class="cmd-list">
+							<div class="cmd-item">
+								<code>glip.librosa</code>
+								<span>Run deep acoustic analysis (Centroid, RMS, F0, ZCR, Flatness).</span>
+							</div>
+						</div>
+					</div>
+
+					<div class="help-section">
+						<h3>SHORTCUTS</h3>
+						<div class="shortcut-grid">
+							<span>Run Query</span> <code>CTRL + ENTER</code>
+							<span>Help Modal</span> <code>CTRL + H</code>
+							<span>Toggle Inspector</span> <code>CTRL + SHIFT + |</code>
+						</div>
+					</div>
+				</div>
+				<div class="modal-footer">
+					Type commands directly into the Query Editor and press Enter.
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	<div class="blender-layout" style="grid-template-columns: 300px 250px 1fr {showMetadata ? '350px' : '0px'}">
+		<!-- Panel 1: Query -->
+		<div class="panel query-panel">
+			<div class="panel-header">
+				QUERY EDITOR
+			</div>
+			<div class="panel-content">
+				<textarea bind:value={query} spellcheck="false" placeholder="Enter GLINO query or GLIP command..."></textarea>
+				<button onclick={runQuery} disabled={loading} class="run-btn">
+					{loading ? 'RUNNING...' : 'RUN (CMD+ENTER)'}
+				</button>
+				<DropZone />
+			</div>
+		</div>
+
+		<!-- Panel 2: Results -->
+		<div class="panel results-panel">
+			<div class="panel-header" style="padding: 0;">
+				<input 
+					type="text" 
+					class="header-search" 
+					placeholder="SEARCH ETA..." 
+					bind:value={resultsSearch} 
+					style="width: 100%; border: none; background: transparent; height: 100%;"
+				/>
+			</div>
+			<div class="panel-content">
+				{#if filteredResults.length === 0}
+					<div class="empty">NO RESULTS</div>
+				{:else}
+					<div class="results-list">
+						{#each filteredResults as tae}
+							<button 
+								class="tae-item" 
+								class:selected={selectedTae?.id === tae.id}
+								onmouseenter={() => selectTaeById(tae.id)}
+								onmouseleave={() => audioEngine.stopTae()}
+								onclick={() => selectTaeById(tae.id)}
+							>
+								<div class="tae-info">
+									<span class="name">{tae.audio}</span>
+									<span class="id">{tae.id.slice(0,8)}</span>
+								</div>
+								<div class="mini-wave">
+									<Waveform audioFile={tae.audio} height={20} color="#555" />
+								</div>
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		</div>
+
+		<!-- Panel 3: Viewers -->
+		<div class="viewers-stack">
+			<div class="panel vector-panel">
+				<div class="panel-header">VECTOR SPACE NAVIGATOR</div>
+				<div class="panel-content" style="padding: 0;">
+					<VectorSpace 
+						points={allPoints} 
+						selectedId={selectedTae?.id} 
+						onSelect={selectTaeById} 
+					/>
+				</div>
+			</div>
+
+			<div class="panel glyph-panel">
+				<div class="panel-header">GLYPH VIEWER</div>
+				<div class="panel-content glyph-container">
+					{#if selectedTae}
+						{@html selectedTae.symbol}
+					{:else}
+						<div class="empty">SELECT A TAE</div>
+					{/if}
+				</div>
+			</div>
+
+			<div class="panel main-panel">
+				<div class="panel-header">
+					<div class="main-tabs">
+						<button class:active={activeMainTab === 'timeline'} onclick={() => activeMainTab = 'timeline'}>TIMELINE</button>
+						<button class:active={activeMainTab === 'analysis'} onclick={() => activeMainTab = 'analysis'}>ANALYSIS</button>
+					</div>
+					<div class="header-actions">
+						{#if activeMainTab === 'timeline'}
+							<button class="header-btn" onclick={() => audioEngine.playTimeline(timeline)}>PLAY</button>
+						{/if}
+					</div>
+				</div>
+				<div class="panel-content" style="padding: 0;">
+					{#if activeMainTab === 'timeline'}
+						<div class="timeline-viz">
+							{#each timeline as event}
+								<div class="event" style="left: {event.start * 100}px; width: {event.duration * 100}px"></div>
+							{/each}
+						</div>
+					{:else}
+						<AnalysisViewer audioFile={selectedTae?.audio} />
+					{/if}
+				</div>
+			</div>
+		</div>
+
+		<!-- Panel 4: Metadata -->
+		<div class="panel metadata-panel" style="display: {showMetadata ? 'flex' : 'none'}">
+			<div class="panel-header">TAE INSPECTOR</div>
+			<div class="panel-content">
+				{#if selectedTae}
+					<div class="inspector">
+						<div class="wave-preview">
+							<Waveform audioFile={selectedTae.audio} height={60} color="var(--accent)" />
+						</div>
+						
+						<details open class="analysis-details">
+							<summary>EMERGING ANALYSIS</summary>
+							{#if selectedTae.descriptors}
+								{@const d = selectedTae.descriptors}
+								<div class="emergent-bars">
+
+									<div class="ebar-row">
+										<span class="ebar-label">CENTROID</span>
+										<div class="ebar-track">
+											<div class="ebar-fill centroid-fill"
+												style="width:{Math.min(100,(d.desc_centroid||0)/8000*100)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_centroid != null ? d.desc_centroid.toFixed(0)+' Hz' : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">RMS</span>
+										<div class="ebar-track">
+											<div class="ebar-fill rms-fill"
+												style="width:{Math.min(100,(d.desc_rms||0)*100*8)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_rms != null ? d.desc_rms.toFixed(4) : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">F0</span>
+										<div class="ebar-track">
+											<div class="ebar-fill f0-fill"
+												style="width:{Math.min(100,(d.desc_f0||0)/2000*100)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_f0 != null && d.desc_f0 > 0 ? d.desc_f0.toFixed(1)+' Hz' : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">DOM F</span>
+										<div class="ebar-track">
+											<div class="ebar-fill domf-fill"
+												style="width:{Math.min(100,(d.desc_dom_freq||0)/4000*100)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_dom_freq != null && d.desc_dom_freq > 0 ? d.desc_dom_freq.toFixed(1)+' Hz' : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">VOICED</span>
+										<div class="ebar-track">
+											<div class="ebar-fill voiced-fill"
+												style="width:{Math.min(100,(d.desc_voiced_prob||0)*100)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_voiced_prob != null ? d.desc_voiced_prob.toFixed(2) : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">ZCR</span>
+										<div class="ebar-track">
+											<div class="ebar-fill zcr-fill"
+												style="width:{Math.min(100,(d.desc_zcr||0)*100*20)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_zcr != null ? d.desc_zcr.toFixed(4) : '—'}</span>
+									</div>
+
+									<div class="ebar-row">
+										<span class="ebar-label">FLATNESS</span>
+										<div class="ebar-track">
+											<div class="ebar-fill flat-fill"
+												style="width:{Math.min(100,(d.desc_flatness||0)*100)}%"></div>
+										</div>
+										<span class="ebar-val">{d.desc_flatness != null ? d.desc_flatness.toFixed(4) : '—'}</span>
+									</div>
+
+									{#if d.desc_centroid != null}
+										{@const isKiki = d.desc_centroid > 3000 || (d.desc_flatness||0) > 0.3}
+										<div class="kiki-bouba-tag" class:kiki={isKiki} class:bouba={!isKiki}>
+											{isKiki ? 'KIKI' : 'BOUBA'} — {isKiki ? 'bright · noisy · angular' : 'dark · harmonic · smooth'}
+										</div>
+									{/if}
+								</div>
+							{:else}
+								<div class="empty" style="padding: 15px;">RUN glip.librosa TO ANALYZE</div>
+							{/if}
+						</details>
+
+						{#each metadataGroups as group}
+							<details open>
+								<summary>{group.label}</summary>
+								<div class="input-group">
+									{#each group.fields as field}
+										<div class="field">
+											<label>
+												<span>{field.replace('_', ' ')}</span>
+												<input bind:value={selectedTae[field]} oninput={saveMetadata} />
+											</label>
+										</div>
+									{/each}
+								</div>
+							</details>
+						{/each}
+					</div>
+				{:else}
+					<div class="empty">NO SELECTION</div>
+				{/if}
+			</div>
+		</div>
+	</div>
+
+	<!-- Status bar — spans full width below the grid -->
+	<div class="status-bar" class:running={statusKind==='running'} class:ok={statusKind==='ok'} class:err={statusKind==='error'}>
+		<span class="status-dot"></span>
+		<span class="status-text">{statusMsg}</span>
+	</div>
+</div>
+
+<style>
+	.app-shell {
+		display: flex;
+		flex-direction: column;
+		height: 100vh;
+		width: 100vw;
+		background: #000;
+		overflow: hidden;
+		position: relative;
+	}
+
+	.modal-backdrop {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		background: rgba(0, 0, 0, 0.85);
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		z-index: 1000;
+		backdrop-filter: blur(4px);
+	}
+
+	.modal {
+		background: #0a0a0a;
+		border: 1px solid #222;
+		width: 600px;
+		max-width: 90vw;
+		max-height: 80vh;
+		display: flex;
+		flex-direction: column;
+		box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+	}
+
+	.modal-header {
+		padding: 10px 15px;
+		background: #111;
+		border-bottom: 1px solid #222;
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		font-size: 11px;
+		font-weight: bold;
+		letter-spacing: 1px;
+	}
+
+	.modal-header button {
+		background: transparent;
+		border: none;
+		color: #666;
+		font-size: 20px;
+		cursor: pointer;
+	}
+
+	.modal-body {
+		padding: 20px;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 25px;
+	}
+
+	.help-section h3 {
+		font-size: 10px;
+		color: #555;
+		margin-bottom: 12px;
+		border-bottom: 1px solid #1a1a1a;
+		padding-bottom: 4px;
+		text-transform: uppercase;
+		letter-spacing: 1.5px;
+	}
+
+	.cmd-list { display: flex; flex-direction: column; gap: 10px; }
+
+	.cmd-item { display: flex; flex-direction: column; gap: 4px; }
+	.cmd-item code { color: var(--accent); font-size: 11px; font-weight: bold; }
+	.cmd-item span { font-size: 10px; color: #888; line-height: 1.4; }
+
+	.shortcut-grid {
+		display: grid;
+		grid-template-columns: 1fr auto;
+		gap: 10px;
+		font-size: 10px;
+		color: #888;
+	}
+
+	.shortcut-grid code {
+		color: #fff;
+		background: #222;
+		padding: 2px 6px;
+		border-radius: 3px;
+		font-family: monospace;
+	}
+
+	.modal-footer {
+		padding: 15px;
+		background: #050505;
+		border-top: 1px solid #111;
+		font-size: 9px;
+		color: #444;
+		text-align: center;
+		font-style: italic;
+	}
+
+	/* ── Status bar ── */
+	.status-bar {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		height: 20px;
+		padding: 0 12px;
+		background: #050505;
+		border-top: 1px solid #1a1a1a;
+		font-size: 9px;
+		color: #444;
+		letter-spacing: 0.08em;
+		flex-shrink: 0;
+		transition: color 0.3s;
+	}
+	.status-bar.ok    { color: #00ff88; }
+	.status-bar.err   { color: #ff4444; }
+	.status-bar.running { color: #ffaa00; }
+
+	.status-dot {
+		width: 5px; height: 5px;
+		border-radius: 50%;
+		background: currentColor;
+		flex-shrink: 0;
+	}
+	.status-bar.running .status-dot {
+		animation: pulse 1s ease-in-out infinite;
+	}
+	@keyframes pulse {
+		0%, 100% { opacity: 1; }
+		50%       { opacity: 0.2; }
+	}
+	.status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+	.blender-layout {
+		flex: 1;
+		display: grid;
+		width: 100%;
+		height: 100%;
+		gap: 2px;
+		background: var(--border);
+		transition: grid-template-columns 0.2s ease;
+	}
+
+	.panel {
+		background: var(--bg);
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+
+	.panel-header {
+		height: 24px;
+		background: var(--surface);
+		font-size: 10px;
+		padding: 0 10px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		color: var(--text-dim);
+		border-bottom: 1px solid var(--border);
+		text-transform: uppercase;
+	}
+
+	.header-actions { display: flex; gap: 5px; }
+
+	.header-search {
+		background: #111;
+		border: 1px solid #333;
+		color: var(--accent);
+		font-size: 8px;
+		padding: 2px 6px;
+		width: 100px;
+		outline: none;
+	}
+
+	.header-search:focus { border-color: var(--accent); }
+
+	.panel-content {
+		flex: 1;
+		padding: 10px;
+		display: flex;
+		flex-direction: column;
+		overflow-y: auto;
+		position: relative;
+	}
+
+	textarea {
+		width: 100%;
+		flex: 1;
+		background: transparent;
+		color: var(--accent);
+		border: none;
+		resize: none;
+		font-family: inherit;
+		outline: none;
+	}
+
+	.run-btn { width: 100%; margin: 10px 0; }
+
+	.viewers-stack {
+		display: grid;
+		grid-template-rows: 1fr 150px 200px;
+		gap: 2px;
+	}
+
+	.tae-item {
+		width: 100%;
+		padding: 8px;
+		background: var(--surface);
+		border: none;
+		border-left: 2px solid transparent;
+		margin-bottom: 4px;
+		cursor: pointer;
+		text-align: left;
+		color: var(--text);
+		font-family: inherit;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.tae-item.selected {
+		background: #222;
+		border-left-color: var(--accent);
+	}
+
+	.tae-info {
+		display: flex;
+		justify-content: space-between;
+		font-size: 10px;
+	}
+
+	.mini-wave { height: 20px; background: #111; }
+
+	.glyph-container {
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		background: #050505;
+	}
+
+	.glyph-container :global(svg) { width: 100px; height: 100px; }
+
+	.timeline-viz {
+		height: 100%;
+		background: #050505;
+		position: relative;
+		border: 1px dashed #222;
+	}
+
+	.event {
+		position: absolute;
+		top: 20px;
+		height: 40px;
+		background: var(--accent);
+		opacity: 0.3;
+		border: 1px solid var(--accent);
+	}
+
+	.inspector {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+
+	.wave-preview {
+		height: 60px;
+		background: #000;
+		border: 1px solid #222;
+		margin-bottom: 10px;
+	}
+
+	details {
+		margin-bottom: 5px;
+		background: #111;
+		border: 1px solid #222;
+	}
+
+	details.analysis-details {
+		background: #161e1a;
+		border-color: #2a3a2a;
+	}
+
+	summary {
+		padding: 5px 10px;
+		font-size: 9px;
+		background: #1a1a1a;
+		cursor: pointer;
+		color: #888;
+		text-transform: uppercase;
+	}
+
+	details.analysis-details summary {
+		background: #1a2a1a;
+		color: #9a9;
+	}
+
+	.input-group { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+
+	.field { display: flex; flex-direction: column; gap: 2px; }
+
+	label { font-size: 8px; color: #555; text-transform: uppercase; }
+
+	input {
+		background: #050505;
+		border: 1px solid #222;
+		color: #eee;
+		padding: 4px 8px;
+		font-family: inherit;
+		font-size: 10px;
+		outline: none;
+	}
+
+	input:focus { border-color: var(--accent); }
+
+	.empty {
+		color: #444;
+		font-size: 10px;
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		height: 100%;
+	}
+
+	.header-btn {
+		background: #333;
+		border: none;
+		color: #fff;
+		font-size: 8px;
+		padding: 2px 6px;
+		cursor: pointer;
+	}
+
+	.main-tabs { display: flex; gap: 10px; }
+	.main-tabs button {
+		background: transparent;
+		border: none;
+		color: #666;
+		font-size: 10px;
+		cursor: pointer;
+	}
+	.main-tabs button.active { color: #fff; }
+
+	/* ── EMERGING ANALYSIS bars ── */
+	.emergent-bars {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 10px;
+	}
+
+	.ebar-row {
+		display: grid;
+		grid-template-columns: 58px 1fr 56px;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.ebar-label {
+		font-size: 7px;
+		color: #555;
+		letter-spacing: 0.06em;
+		text-align: right;
+	}
+
+	.ebar-track {
+		height: 3px;
+		background: #111;
+		overflow: hidden;
+	}
+
+	.ebar-fill {
+		height: 100%;
+		min-width: 1px;
+		transition: width 0.5s ease;
+	}
+
+	.centroid-fill { background: #00ff88; }
+	.rms-fill      { background: #ff6644; }
+	.f0-fill       { background: #00ccff; }
+	.domf-fill     { background: #ff88cc; }  /* piptrack dominant — works for inharmonics */
+	.voiced-fill   { background: #88ffcc; }  /* pyin voiced probability */
+	.zcr-fill      { background: #cc88ff; }
+	.flat-fill     { background: #ffaa00; }
+
+	.ebar-val {
+		font-size: 7px;
+		color: #444;
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
+	.kiki-bouba-tag {
+		margin-top: 4px;
+		padding: 4px 8px;
+		font-size: 8px;
+		letter-spacing: 0.08em;
+		border: 1px solid #1a1a1a;
+		color: #555;
+	}
+
+	.kiki-bouba-tag.kiki {
+		border-color: #2a1a1a;
+		color: #ff6644;
+		background: #100808;
+	}
+
+	.kiki-bouba-tag.bouba {
+		border-color: #1a2a1a;
+		color: #00ff88;
+		background: #080f08;
+	}
+</style>

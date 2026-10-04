@@ -1,0 +1,20 @@
+{
+  "name": "glip-player",
+  "description": "Plays a glip annotation: YouTube / Vimeo / video clip with timed score-style overlays (rect, ellipse, line, arrow, freehand, text).",
+  "targets": ["so", "musiki"],
+  "options": {
+    "src": {
+      "type": "string",
+      "default": "",
+      "description": "Same-origin path to the annotation JSON (host proxy, e.g. /api/glip/annotations/<id>). For other origins use the iframe https://glip.zztt.org/embed/<id>."
+    },
+    "meta": {
+      "type": "string",
+      "default": "top",
+      "enum": ["none", "top", "bottom"],
+      "description": "Where to show work · composer · year · tags."
+    },
+    "autoplay": { "type": "boolean", "default": false, "description": "Start muted and playing." },
+    "loop": { "type": "boolean", "default": false, "description": "Loop the clip (in → out)." }
+  }
+}

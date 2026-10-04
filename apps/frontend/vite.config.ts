@@ -19,6 +19,7 @@ export default defineConfig(({ mode }) => {
 		plugins: [sveltekit()],
 		server: {
 			port: 5174,
+			fs: { allow: ['../../packages'] },
 			proxy: {
 				'/api':   { target: vps,    changeOrigin: true, secure: !isTunnel },
 				'/audio': { target: vps,    changeOrigin: true, secure: !isTunnel },
