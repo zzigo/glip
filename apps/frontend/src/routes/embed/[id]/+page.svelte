@@ -28,14 +28,13 @@
 	<!-- svelte-ignore element_invalid_self_closing_tag -->
 	<glip-player
 		bind:this={playerEl}
+		src="/api/annotations/{data.annotation.id}"
 		bridge=""
 		meta={data.meta}
 		autoplay={data.autoplay ? '' : undefined}
 		loop={data.loop ? '' : undefined}
 	>
-		<script type="application/json">
-			{@html JSON.stringify(data.annotation).replace(/</g, '\\u003c')}
-		</script>
+		{@html `<script type="application/json">${JSON.stringify(data.annotation).replace(/</g, '\\u003c')}</` + 'script>'}
 	</glip-player>
 </div>
 

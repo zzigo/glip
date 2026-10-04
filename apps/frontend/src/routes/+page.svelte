@@ -305,13 +305,18 @@
 							<button type="button" class="btn btn-sm btn-play" onclick={() => playItem(item.id)}>
 								▶ Ver
 							</button>
-							<a href="/annotate/{item.id}" class="btn btn-sm btn-subtle">
-								✎ Editar
-							</a>
-							<button type="button" class="btn btn-sm btn-subtle" title="Copiar iframe" onclick={() => copyEmbed(item.id)}>
+							<button type="button" class="btn btn-sm btn-subtle" title="Copiar iframe para embeber" onclick={() => copyEmbed(item.id)}>
 								📋 Embeber
 							</button>
-							<button type="button" class="btn btn-sm btn-danger-link" title="Eliminar" onclick={() => deleteItem(item.id)}>
+							{#if item.url}
+								<a href={item.url} target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-subtle" title="Abrir video original en YouTube / web">
+									↗ Video
+								</a>
+							{/if}
+							<a href="/annotate/{item.id}" class="btn btn-sm btn-subtle" title="Editar anotación">
+								✎ Editar
+							</a>
+							<button type="button" class="btn btn-sm btn-danger-link" title="Eliminar anotación" onclick={() => deleteItem(item.id)}>
 								🗑
 							</button>
 						</div>
@@ -357,9 +362,12 @@
 									</div>
 
 									<div class="row-actions">
-										<button type="button" class="btn btn-sm btn-play" onclick={() => playItem(item.id)}>▶</button>
-										<a href="/annotate/{item.id}" class="btn btn-sm btn-subtle">✎</a>
-										<button type="button" class="btn btn-sm btn-subtle" onclick={() => copyEmbed(item.id)}>📋</button>
+										<button type="button" class="btn btn-sm btn-play" onclick={() => playItem(item.id)}>▶ Ver</button>
+										<button type="button" class="btn btn-sm btn-subtle" title="Copiar iframe" onclick={() => copyEmbed(item.id)}>📋 Embeber</button>
+										{#if item.url}
+											<a href={item.url} target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-subtle" title="Abrir video original">↗ Video</a>
+										{/if}
+										<a href="/annotate/{item.id}" class="btn btn-sm btn-subtle" title="Editar">✎</a>
 									</div>
 								</article>
 							{/each}
@@ -382,8 +390,11 @@
 						{/if}
 					</div>
 					<div class="modal-controls">
-						<a href="/annotate/{playingId}" class="btn btn-xs btn-subtle">✎ Editar anotación</a>
 						<button type="button" class="btn btn-xs btn-subtle" onclick={() => copyEmbed(playingId!)}>📋 Copiar iframe</button>
+						{#if playingAnnotation?.source?.url}
+							<a href={playingAnnotation.source.url} target="_blank" rel="noopener noreferrer" class="btn btn-xs btn-subtle" title="Abrir video en YouTube">↗ Video original</a>
+						{/if}
+						<a href="/annotate/{playingId}" class="btn btn-xs btn-subtle">✎ Editar</a>
 						<button type="button" class="btn-close" onclick={closePlayer}>×</button>
 					</div>
 				</div>
@@ -392,14 +403,13 @@
 					<!-- svelte-ignore element_invalid_self_closing_tag -->
 					<glip-player
 						bind:this={playerModalEl}
+						src="/api/annotations/{playingId}"
 						autoplay=""
 						bridge=""
 						meta="bottom"
 					>
 						{#if playingAnnotation}
-							<script type="application/json">
-								{@html JSON.stringify(playingAnnotation).replace(/</g, '\\u003c')}
-							</script>
+							{@html `<script type="application/json">${JSON.stringify(playingAnnotation).replace(/</g, '\\u003c')}</` + 'script>'}
 						{/if}
 					</glip-player>
 				</div>

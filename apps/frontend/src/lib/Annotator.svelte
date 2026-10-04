@@ -8,7 +8,11 @@
 		viewHeight,
 		normalizeAnnotation,
 		makeId,
-		visibleShapes
+		visibleShapes,
+		shapeBBox,
+		hitTest,
+		translateShape,
+		watchUrl
 	} from '$glip/glip-core.js';
 	import { prepareOverlay, renderShapes } from '$glip/glip-overlay.js';
 	import { createPlayer } from '$glip/glip-players.js';
@@ -149,7 +153,7 @@
 				const active = visibleShapes(shapes, currentTime);
 				// If draft exists, also include draft
 				const toRender = draftShape ? [...active, draftShape] : active;
-				renderShapes(overlaySvg, toRender, currentTime, aspect);
+				renderShapes(overlaySvg, toRender, aspect, { selectedId: selectedShapeId });
 			}
 		}
 		if (typeof window !== 'undefined' && typeof requestAnimationFrame !== 'undefined') {
@@ -269,22 +273,58 @@
 		clipOut = null;
 	}
 
-	// Normalized pointer coords [0..1, 0..1/aspect]
+	// Normalized pointer coords [0..1, 0..1]
 	function getNormCoords(e: MouseEvent | TouchEvent): [number, number] | null {
 		if (!overlaySvg) return null;
 		const rect = overlaySvg.getBoundingClientRect();
-		const clientX = 'touches' in e ? e.touches[0]?.clientX ?? 0 : e.clientX;
-		const clientY = 'touches' in e ? e.touches[0]?.clientY ?? 0 : e.clientY;
+		const clientX = 'touches' in e ? e.touches[0]?.clientX ?? 0 : (e as MouseEvent).clientX;
+		const clientY = 'touches' in e ? e.touches[0]?.clientY ?? 0 : (e as MouseEvent).clientY;
 
+		if (rect.width <= 0 || rect.height <= 0) return null;
 		const nx = (clientX - rect.left) / rect.width;
 		const ny = (clientY - rect.top) / rect.height;
 		return [Math.max(0, Math.min(nx, 1)), Math.max(0, Math.min(ny, 1))];
 	}
 
+	// Dragging & Resizing state for selected shape
+	type HandleMode = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'p0' | 'p1';
+	let dragState = $state<{
+		mode: HandleMode;
+		startPt: [number, number];
+		shapeOrig: any;
+	} | null>(null);
+
+	function startHandleDrag(e: MouseEvent, mode: HandleMode) {
+		e.stopPropagation();
+		e.preventDefault();
+		const pt = getNormCoords(e);
+		if (!pt || !selectedShape) return;
+		dragState = {
+			mode,
+			startPt: pt,
+			shapeOrig: JSON.parse(JSON.stringify(selectedShape))
+		};
+	}
+
 	function handlePointerDown(e: MouseEvent) {
-		if (currentTool === 'select') return;
 		const pt = getNormCoords(e);
 		if (!pt) return;
+
+		if (currentTool === 'select') {
+			// Test if clicked on visible shape
+			const hit = hitTest(shapes, currentTime, pt[0], pt[1], aspect, 0.02);
+			if (hit) {
+				selectedShapeId = hit.id;
+				dragState = {
+					mode: 'move',
+					startPt: pt,
+					shapeOrig: JSON.parse(JSON.stringify(hit))
+				};
+			} else {
+				selectedShapeId = null;
+			}
+			return;
+		}
 
 		isDrawing = true;
 		drawStart = pt;
@@ -344,9 +384,65 @@
 	}
 
 	function handlePointerMove(e: MouseEvent) {
-		if (!isDrawing || !drawStart || !draftShape) return;
 		const pt = getNormCoords(e);
 		if (!pt) return;
+
+		// 1. Moving or resizing an existing shape
+		if (dragState && selectedShape) {
+			const dx = pt[0] - dragState.startPt[0];
+			const dy = pt[1] - dragState.startPt[1];
+			const orig = dragState.shapeOrig;
+
+			if (dragState.mode === 'move') {
+				const moved = translateShape(orig, dx, dy);
+				Object.assign(selectedShape, moved);
+				shapes = [...shapes];
+			} else if (dragState.mode === 'p0' && (selectedShape.kind === 'line' || selectedShape.kind === 'arrow')) {
+				selectedShape.pts = [
+					[Math.round((orig.pts[0][0] + dx) * 1000) / 1000, Math.round((orig.pts[0][1] + dy) * 1000) / 1000],
+					orig.pts[1]
+				];
+				shapes = [...shapes];
+			} else if (dragState.mode === 'p1' && (selectedShape.kind === 'line' || selectedShape.kind === 'arrow')) {
+				selectedShape.pts = [
+					orig.pts[0],
+					[Math.round((orig.pts[1][0] + dx) * 1000) / 1000, Math.round((orig.pts[1][1] + dy) * 1000) / 1000]
+				];
+				shapes = [...shapes];
+			} else if (selectedShape.kind === 'rect' || selectedShape.kind === 'ellipse') {
+				let ox = orig.x || 0;
+				let oy = orig.y || 0;
+				let ow = orig.w || 0;
+				let oh = orig.h || 0;
+
+				if (dragState.mode === 'se') {
+					selectedShape.w = Math.max(0.01, Math.round((ow + dx) * 1000) / 1000);
+					selectedShape.h = Math.max(0.01, Math.round((oh + dy) * 1000) / 1000);
+				} else if (dragState.mode === 'sw') {
+					const newW = Math.max(0.01, ow - dx);
+					selectedShape.x = Math.round((ox + (ow - newW)) * 1000) / 1000;
+					selectedShape.w = Math.round(newW * 1000) / 1000;
+					selectedShape.h = Math.max(0.01, Math.round((oh + dy) * 1000) / 1000);
+				} else if (dragState.mode === 'ne') {
+					selectedShape.w = Math.max(0.01, Math.round((ow + dx) * 1000) / 1000);
+					const newH = Math.max(0.01, oh - dy);
+					selectedShape.y = Math.round((oy + (oh - newH)) * 1000) / 1000;
+					selectedShape.h = Math.round(newH * 1000) / 1000;
+				} else if (dragState.mode === 'nw') {
+					const newW = Math.max(0.01, ow - dx);
+					const newH = Math.max(0.01, oh - dy);
+					selectedShape.x = Math.round((ox + (ow - newW)) * 1000) / 1000;
+					selectedShape.y = Math.round((oy + (oh - newH)) * 1000) / 1000;
+					selectedShape.w = Math.round(newW * 1000) / 1000;
+					selectedShape.h = Math.round(newH * 1000) / 1000;
+				}
+				shapes = [...shapes];
+			}
+			return;
+		}
+
+		// 2. Drawing a new shape
+		if (!isDrawing || !drawStart || !draftShape) return;
 
 		if (currentTool === 'free') {
 			draftShape.pts = [...draftShape.pts, [Math.round(pt[0] * 1000) / 1000, Math.round(pt[1] * 1000) / 1000]];
@@ -368,6 +464,10 @@
 	}
 
 	function handlePointerUp() {
+		if (dragState) {
+			dragState = null;
+		}
+
 		if (!isDrawing) return;
 		isDrawing = false;
 		if (draftShape) {
@@ -405,6 +505,23 @@
 	}
 
 	let selectedShape = $derived(shapes.find((s) => s.id === selectedShapeId) || null);
+
+	// Calculated BBox and gizmo coordinates for selected shape
+	let selectedBBox = $derived.by(() => {
+		if (!selectedShape) return null;
+		const [x0, y0, x1, y1] = shapeBBox(selectedShape, aspect);
+		const H = viewHeight(aspect);
+		return {
+			x: x0 * VIEW_W,
+			y: y0 * H,
+			w: (x1 - x0) * VIEW_W,
+			h: (y1 - y0) * H,
+			x0: x0 * VIEW_W,
+			y0: y0 * H,
+			x1: x1 * VIEW_W,
+			y1: y1 * H
+		};
+	});
 
 	function updateSelectedShapeTime(field: 't0' | 't1') {
 		if (!selectedShape) return;
@@ -483,10 +600,19 @@
 	}
 
 	function copyEmbed() {
-		if (!embedCode) return;
-		navigator.clipboard.writeText(embedCode);
+		const origin = typeof window !== 'undefined' ? window.location.origin : '';
+		const targetId = id || initialData?.id;
+		const code = embedCode || (targetId ? `<iframe src="${origin}/embed/${targetId}" width="100%" height="480" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>` : '');
+		if (!code) return;
+		navigator.clipboard.writeText(code);
 		copied = true;
-		setTimeout(() => (copied = false), 2500);
+		statusMsg = '¡Código iframe copiado al portapapeles!';
+		statusKind = 'ok';
+		setTimeout(() => {
+			copied = false;
+			statusMsg = '';
+			statusKind = '';
+		}, 2500);
 	}
 </script>
 
@@ -502,9 +628,29 @@
 			{#if statusMsg}
 				<span class="status-pill status-{statusKind}">{statusMsg}</span>
 			{/if}
+			{#if source?.url}
+				<a
+					href={watchUrl(source, currentTime)}
+					target="_blank"
+					rel="noreferrer"
+					class="btn btn-outline"
+					title="Abrir video original en una pestaña nueva"
+				>
+					↗ Video original
+				</a>
+			{/if}
 			{#if id}
-				<button type="button" class="btn btn-outline" onclick={() => (showEmbedModal = true)}>
-					📋 Embeber
+				<button type="button" class="btn btn-outline" onclick={copyEmbed} title="Copiar código iframe directamente">
+					{copied ? '✓ Copiado' : '📋 Copiar iframe'}
+				</button>
+				<button type="button" class="btn btn-outline" onclick={() => {
+					const origin = typeof window !== 'undefined' ? window.location.origin : '';
+					if (!embedCode && id) {
+						embedCode = `<iframe src="${origin}/embed/${id}" width="100%" height="480" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+					}
+					showEmbedModal = true;
+				}}>
+					&lt;/&gt; Ver Embed
 				</button>
 				<a href="/embed/{id}" target="_blank" class="btn btn-outline">▶ Vista Embed</a>
 			{/if}
@@ -574,12 +720,93 @@
 				<svg
 					class="overlay-svg"
 					class:interactive={currentTool !== 'select'}
+					class:pointer-select={currentTool === 'select'}
 					bind:this={overlaySvg}
 					onmousedown={handlePointerDown}
 					onmousemove={handlePointerMove}
 					onmouseup={handlePointerUp}
 					aria-label="Capa de anotaciones"
-				></svg>
+				>
+					<!-- Gizmo handles rendered directly on top of active shapes -->
+					{#if selectedShape && selectedBBox}
+						{@const box = selectedBBox}
+						{@const H = viewHeight(aspect)}
+						<g class="gizmo-layer">
+							<!-- Bounding box highlight with move cursor -->
+							<rect
+								x={box.x - 4}
+								y={box.y - 4}
+								width={box.w + 8}
+								height={box.h + 8}
+								class="gizmo-frame"
+								onmousedown={(e) => startHandleDrag(e, 'move')}
+							/>
+
+							{#if selectedShape.kind === 'rect' || selectedShape.kind === 'ellipse'}
+								<!-- 4 corner handles -->
+								<rect
+									x={box.x - 7}
+									y={box.y - 7}
+									width={14}
+									height={14}
+									class="gizmo-handle handle-nw"
+									onmousedown={(e) => startHandleDrag(e, 'nw')}
+								/>
+								<rect
+									x={box.x + box.w - 7}
+									y={box.y - 7}
+									width={14}
+									height={14}
+									class="gizmo-handle handle-ne"
+									onmousedown={(e) => startHandleDrag(e, 'ne')}
+								/>
+								<rect
+									x={box.x + box.w - 7}
+									y={box.y + box.h - 7}
+									width={14}
+									height={14}
+									class="gizmo-handle handle-se"
+									onmousedown={(e) => startHandleDrag(e, 'se')}
+								/>
+								<rect
+									x={box.x - 7}
+									y={box.y + box.h - 7}
+									width={14}
+									height={14}
+									class="gizmo-handle handle-sw"
+									onmousedown={(e) => startHandleDrag(e, 'sw')}
+								/>
+							{:else if (selectedShape.kind === 'line' || selectedShape.kind === 'arrow') && selectedShape.pts}
+								<!-- End-point handles for lines and arrows -->
+								{@const p0 = [selectedShape.pts[0][0] * VIEW_W, selectedShape.pts[0][1] * H]}
+								{@const p1 = [selectedShape.pts[1][0] * VIEW_W, selectedShape.pts[1][1] * H]}
+								<circle
+									cx={p0[0]}
+									cy={p0[1]}
+									r={8}
+									class="gizmo-handle handle-point"
+									onmousedown={(e) => startHandleDrag(e, 'p0')}
+								/>
+								<circle
+									cx={p1[0]}
+									cy={p1[1]}
+									r={8}
+									class="gizmo-handle handle-point"
+									onmousedown={(e) => startHandleDrag(e, 'p1')}
+								/>
+							{:else}
+								<!-- Center move handle for free drawing and text -->
+								<circle
+									cx={box.x + box.w / 2}
+									cy={box.y + box.h / 2}
+									r={9}
+									class="gizmo-handle handle-move"
+									onmousedown={(e) => startHandleDrag(e, 'move')}
+								/>
+							{/if}
+						</g>
+					{/if}
+				</svg>
 			</div>
 
 			<!-- Toolbar: Drawing Tools & Colors -->
@@ -589,8 +816,8 @@
 						type="button"
 						class="tool-btn"
 						class:active={currentTool === 'select'}
-						title="Seleccionar y reproducir (Puntero)"
-						onclick={() => (currentTool = 'select')}>↖ Ver</button
+						title="Seleccionar y transformar anotaciones"
+						onclick={() => (currentTool = 'select')}>↖ Seleccionar</button
 					>
 					<button
 						type="button"
@@ -1128,6 +1355,48 @@
 	.overlay-svg.interactive {
 		pointer-events: auto;
 		cursor: crosshair;
+	}
+
+	.overlay-svg.pointer-select {
+		pointer-events: auto;
+		cursor: default;
+	}
+
+	.gizmo-layer {
+		pointer-events: auto;
+	}
+
+	.gizmo-frame {
+		fill: rgba(59, 130, 246, 0.08);
+		stroke: #3b82f6;
+		stroke-width: 1.5;
+		stroke-dasharray: 5 4;
+		cursor: move;
+	}
+
+	.gizmo-handle {
+		fill: #ffffff;
+		stroke: #2563eb;
+		stroke-width: 2;
+		filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
+	}
+
+	.gizmo-handle.handle-nw,
+	.gizmo-handle.handle-se {
+		cursor: nwse-resize;
+	}
+
+	.gizmo-handle.handle-ne,
+	.gizmo-handle.handle-sw {
+		cursor: nesw-resize;
+	}
+
+	.gizmo-handle.handle-point {
+		cursor: crosshair;
+	}
+
+	.gizmo-handle.handle-move {
+		cursor: move;
 	}
 
 	.tools-bar {

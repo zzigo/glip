@@ -108,8 +108,11 @@ export class GlipPlayerElement extends HTMLElement {
     if (this.hasAttribute('bridge')) window.addEventListener('message', this._onMessage);
     if (!this._data) {
       const inline = this.querySelector('script[type="application/json"]');
-      if (inline?.textContent) {
-        try { this._load(JSON.parse(inline.textContent)); } catch (e) { this._error('Invalid inline annotation JSON'); }
+      const text = inline?.textContent?.trim();
+      if (text) {
+        if (text.startsWith('{') || text.startsWith('[')) {
+          try { this._load(JSON.parse(text)); } catch (e) { this._error('Invalid inline annotation JSON'); }
+        }
       } else if (this.getAttribute('src')) this._fetch(this.getAttribute('src'));
     }
   }
