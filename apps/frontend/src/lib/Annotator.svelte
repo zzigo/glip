@@ -75,6 +75,57 @@
 	let embedCode = $state('');
 	let copied = $state(false);
 
+	// YouTube live search state
+	let searchResults = $state<any[]>([]);
+	let isSearching = $state(false);
+	let showSearchDropdown = $state(false);
+	let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function handleMediaInputChange(val: string) {
+		mediaInput = val;
+		const trimmed = val.trim();
+
+		// If it looks like a direct URL, don't search
+		if (/^(https?:\/\/|www\.|youtu\.be|vimeo\.com)/i.test(trimmed)) {
+			showSearchDropdown = false;
+			searchResults = [];
+			return;
+		}
+
+		if (trimmed.length < 2) {
+			showSearchDropdown = false;
+			searchResults = [];
+			return;
+		}
+
+		if (searchTimer) clearTimeout(searchTimer);
+		searchTimer = setTimeout(async () => {
+			isSearching = true;
+			try {
+				const res = await fetch(`/api/youtube/search?q=${encodeURIComponent(trimmed)}`);
+				if (res.ok) {
+					const data = await res.json();
+					searchResults = data.items || [];
+					showSearchDropdown = searchResults.length > 0;
+				}
+			} catch (e) {
+				console.warn('YouTube search failed', e);
+			} finally {
+				isSearching = false;
+			}
+		}, 300);
+	}
+
+	function selectSearchResult(item: any) {
+		mediaInput = `https://www.youtube.com/watch?v=${item.mediaId}`;
+		if (!title || title.startsWith('Anotación YouTube')) {
+			title = item.title;
+		}
+		showSearchDropdown = false;
+		searchResults = [];
+		loadMedia(mediaInput);
+	}
+
 	let rafId = 0;
 
 	// Loop to update clock and SVG overlay
@@ -101,7 +152,9 @@
 				renderShapes(overlaySvg, toRender, currentTime, aspect);
 			}
 		}
-		rafId = requestAnimationFrame(tick);
+		if (typeof window !== 'undefined' && typeof requestAnimationFrame !== 'undefined') {
+			rafId = requestAnimationFrame(tick);
+		}
 	}
 
 	async function loadMedia(urlToLoad?: string) {
@@ -163,11 +216,15 @@
 		if (source?.url) {
 			await loadMedia(source.url);
 		}
-		rafId = requestAnimationFrame(tick);
+		if (typeof window !== 'undefined' && typeof requestAnimationFrame !== 'undefined') {
+			rafId = requestAnimationFrame(tick);
+		}
 	});
 
 	onDestroy(() => {
-		cancelAnimationFrame(rafId);
+		if (typeof cancelAnimationFrame !== 'undefined') {
+			cancelAnimationFrame(rafId);
+		}
 		if (player) {
 			player.destroy();
 			player = null;
@@ -460,14 +517,45 @@
 	<div class="anno-layout">
 		<!-- Left: Video & Canvas Stage -->
 		<section class="stage-section">
-			<!-- Video loader input -->
+			<!-- Video loader input with live YouTube search -->
 			<div class="media-input-bar">
-				<input
-					type="url"
-					placeholder="Pega link de YouTube, Vimeo o video .mp4/.webm..."
-					bind:value={mediaInput}
-					onkeydown={(e) => e.key === 'Enter' && loadMedia()}
-				/>
+				<div class="input-wrapper">
+					<input
+						type="text"
+						placeholder="Pega link de YouTube o escribe para buscar video..."
+						value={mediaInput}
+						oninput={(e) => handleMediaInputChange((e.target as HTMLInputElement).value)}
+						onkeydown={(e) => e.key === 'Enter' && loadMedia()}
+						onfocus={() => { if (searchResults.length > 0) showSearchDropdown = true; }}
+					/>
+					{#if isSearching}
+						<span class="search-spinner">⏳</span>
+					{/if}
+
+					<!-- Search preview dropdown -->
+					{#if showSearchDropdown && searchResults.length > 0}
+						<div class="search-dropdown">
+							{#each searchResults as r}
+								<button
+									type="button"
+									class="search-result-item"
+									onclick={() => selectSearchResult(r)}
+								>
+									{#if r.thumbnailUrl}
+										<img src={r.thumbnailUrl} alt="" class="result-thumb" />
+									{/if}
+									<div class="result-info">
+										<strong class="result-title">{r.title}</strong>
+										<span class="result-meta">
+											{r.channelTitle} {#if r.publishedAt}· {r.publishedAt}{/if}
+										</span>
+									</div>
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
 				<button type="button" class="btn btn-sm" onclick={() => loadMedia()}>Cargar video</button>
 			</div>
 
@@ -906,18 +994,101 @@
 		gap: 8px;
 	}
 
-	.media-input-bar input {
+	.input-wrapper {
+		position: relative;
 		flex: 1;
+		display: flex;
+		align-items: center;
+	}
+
+	.input-wrapper input {
+		width: 100%;
 		background: #14171d;
 		border: 1px solid #2a2f3b;
 		color: #fff;
-		padding: 8px 12px;
+		padding: 8px 36px 8px 12px;
 		border-radius: 6px;
 		font-size: 13px;
 	}
-	.media-input-bar input:focus {
+	.input-wrapper input:focus {
 		outline: none;
 		border-color: #3b82f6;
+	}
+
+	.search-spinner {
+		position: absolute;
+		right: 12px;
+		font-size: 12px;
+		pointer-events: none;
+	}
+
+	.search-dropdown {
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 0;
+		right: 0;
+		background: #14171d;
+		border: 1px solid #2a2f3b;
+		border-radius: 8px;
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
+		max-height: 340px;
+		overflow-y: auto;
+		z-index: 50;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.search-result-item {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 8px 12px;
+		background: transparent;
+		border: none;
+		border-bottom: 1px solid #1e222b;
+		color: #e4e7eb;
+		text-align: left;
+		cursor: pointer;
+		width: 100%;
+		transition: background 0.15s;
+	}
+	.search-result-item:last-child {
+		border-bottom: none;
+	}
+	.search-result-item:hover {
+		background: #1f2533;
+	}
+
+	.result-thumb {
+		width: 64px;
+		height: 40px;
+		object-fit: cover;
+		border-radius: 4px;
+		background: #000;
+		flex-shrink: 0;
+	}
+
+	.result-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		overflow: hidden;
+	}
+
+	.result-title {
+		font-size: 13px;
+		font-weight: 600;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.result-meta {
+		font-size: 11px;
+		color: #9ba3af;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.video-container {

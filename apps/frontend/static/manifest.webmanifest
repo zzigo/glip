@@ -1,0 +1,16 @@
+{
+	"name": "glip · anotador multimedial",
+	"short_name": "glip",
+	"description": "Anotador y reproductor de video con capas de partitura y análisis",
+	"start_url": "/",
+	"display": "standalone",
+	"background_color": "#0e1117",
+	"theme_color": "#f1efe6",
+	"icons": [
+		{
+			"src": "/favicon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml"
+		}
+	]
+}
