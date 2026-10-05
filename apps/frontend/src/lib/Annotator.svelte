@@ -51,11 +51,14 @@
 	let selectedShapeId = $state<string | null>(null);
 
 	// Tool state
-	type Tool = 'select' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'free' | 'text';
+	// Tool state
+	type Tool = 'select' | 'rect' | 'ellipse' | 'triangle' | 'hairpin' | 'line' | 'arrow' | 'serpentine' | 'free' | 'text' | 'tag';
 	let currentTool = $state<Tool>('select');
 	let currentColor = $state(PALETTE[0]);
 	let strokeWidth = $state(4);
 	let fillEnabled = $state(false);
+	let currentOpacity = $state(1); // 1 or 0.5
+	let serpentineWaves = $state(8); // alt changes while drawing or setting
 
 	// Player & timing state
 	let playerContainer: HTMLElement | null = $state(null);
@@ -215,7 +218,46 @@
 		}
 	}
 
+	function handleKeyDown(e: KeyboardEvent) {
+		const target = e.target as HTMLElement | null;
+		const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
+		// Spacebar = toggle play (when not typing in an input)
+		if (e.key === ' ' && !isInput) {
+			e.preventDefault();
+			togglePlay();
+			return;
+		}
+
+		// 0 = rewind to fragment start (clipIn)
+		if (e.key === '0' && !isInput) {
+			e.preventDefault();
+			seekTo(clipIn || 0);
+			return;
+		}
+
+		// Backspace or Delete on selected shape = delete shape without confirmation
+		if ((e.key === 'Backspace' || e.key === 'Delete') && !isInput && selectedShapeId) {
+			e.preventDefault();
+			removeShape(selectedShapeId);
+			return;
+		}
+
+		// Tool shortcuts
+		if (!isInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+			const key = e.key.toLowerCase();
+			if (key === 'v') currentTool = 'select';
+			else if (key === 'r') currentTool = 'rect';
+			else if (key === 'o') currentTool = 'ellipse';
+			else if (key === 'l') currentTool = 'line';
+			else if (key === 'a') currentTool = 'arrow';
+			else if (key === 'd') currentTool = 'free';
+			else if (key === 't') currentTool = 'text';
+		}
+	}
+
 	onMount(async () => {
+		window.addEventListener('keydown', handleKeyDown);
 		if (overlaySvg) prepareOverlay(overlaySvg, aspect);
 		if (source?.url) {
 			await loadMedia(source.url);
@@ -226,6 +268,9 @@
 	});
 
 	onDestroy(() => {
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('keydown', handleKeyDown);
+		}
 		if (typeof cancelAnimationFrame !== 'undefined') {
 			cancelAnimationFrame(rafId);
 		}
@@ -287,11 +332,12 @@
 	}
 
 	// Dragging & Resizing state for selected shape
-	type HandleMode = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'p0' | 'p1';
+	type HandleMode = 'move' | 'nw' | 'ne' | 'se' | 'sw' | 'p0' | 'p1' | 'rotate' | 'clipIn' | 'clipOut';
 	let dragState = $state<{
 		mode: HandleMode;
 		startPt: [number, number];
 		shapeOrig: any;
+		center?: [number, number];
 	} | null>(null);
 
 	function startHandleDrag(e: MouseEvent, mode: HandleMode) {
@@ -299,10 +345,18 @@
 		e.preventDefault();
 		const pt = getNormCoords(e);
 		if (!pt || !selectedShape) return;
+
+		let center: [number, number] | undefined;
+		if (mode === 'rotate') {
+			const [x0, y0, x1, y1] = shapeBBox(selectedShape, aspect);
+			center = [(x0 + x1) / 2, (y0 + y1) / 2];
+		}
+
 		dragState = {
 			mode,
 			startPt: pt,
-			shapeOrig: JSON.parse(JSON.stringify(selectedShape))
+			shapeOrig: JSON.parse(JSON.stringify(selectedShape)),
+			center
 		};
 	}
 
@@ -332,6 +386,39 @@
 		const t0 = Math.round(currentTime * 10) / 10;
 		const t1 = clipOut != null ? clipOut : t0 + 4;
 
+		if (currentTool === 'tag') {
+			isDrawing = false;
+			const input = prompt('Texto o etiqueta temporal:', 'Sección A');
+			if (input && input.trim()) {
+				const tagText = input.trim();
+				const newShape = {
+					id: makeId(8),
+					kind: 'tag',
+					text: tagText,
+					x: Math.round(pt[0] * 1000) / 1000,
+					y: Math.round(pt[1] * 1000) / 1000,
+					w: 0.12,
+					h: 0.04,
+					color: currentColor,
+					opacity: currentOpacity,
+					width: strokeWidth,
+					fill: true,
+					t0,
+					t1
+				};
+				shapes = [...shapes, newShape];
+				selectedShapeId = newShape.id;
+
+				// Append to metadata tags if not already present
+				const existingTags = tagsString.split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean);
+				const cleanTag = tagText.toLowerCase();
+				if (!existingTags.includes(cleanTag)) {
+					tagsString = existingTags.length ? `${tagsString}, ${cleanTag}` : cleanTag;
+				}
+			}
+			return;
+		}
+
 		if (currentTool === 'text') {
 			isDrawing = false;
 			const input = prompt('Texto de la anotación:');
@@ -344,6 +431,7 @@
 					y: Math.round(pt[1] * 1000) / 1000,
 					size: 32,
 					color: currentColor,
+					opacity: currentOpacity,
 					width: strokeWidth,
 					fill: fillEnabled,
 					t0,
@@ -361,6 +449,7 @@
 				kind: 'free',
 				pts: [[Math.round(pt[0] * 1000) / 1000, Math.round(pt[1] * 1000) / 1000]],
 				color: currentColor,
+				opacity: currentOpacity,
 				width: strokeWidth,
 				t0,
 				t1
@@ -375,8 +464,10 @@
 				h: 0,
 				pts: [pt, pt],
 				color: currentColor,
+				opacity: currentOpacity,
 				width: strokeWidth,
 				fill: fillEnabled,
+				waves: serpentineWaves,
 				t0,
 				t1
 			};
@@ -387,50 +478,110 @@
 		const pt = getNormCoords(e);
 		if (!pt) return;
 
-		// 1. Moving or resizing an existing shape
+		// 1. Moving, resizing, or rotating an existing shape
 		if (dragState && selectedShape) {
-			const dx = pt[0] - dragState.startPt[0];
-			const dy = pt[1] - dragState.startPt[1];
 			const orig = dragState.shapeOrig;
 
+			if (dragState.mode === 'rotate' && dragState.center) {
+				const cx = dragState.center[0];
+				const cy = dragState.center[1];
+				const origAngle = Math.atan2(dragState.startPt[1] - cy, (dragState.startPt[0] - cx) * aspect);
+				const currentAngle = Math.atan2(pt[1] - cy, (pt[0] - cx) * aspect);
+				let deg = (orig.rotation || 0) + ((currentAngle - origAngle) * 180) / Math.PI;
+
+				// Shift-snap rotation to 45 degree increments
+				if (e.shiftKey) {
+					deg = Math.round(deg / 45) * 45;
+				}
+				selectedShape.rotation = Math.round(deg * 10) / 10;
+				shapes = [...shapes];
+				return;
+			}
+
+			const dx = pt[0] - dragState.startPt[0];
+			const dy = pt[1] - dragState.startPt[1];
+
 			if (dragState.mode === 'move') {
-				const moved = translateShape(orig, dx, dy);
+				let finalDx = dx;
+				let finalDy = dy;
+				if (e.shiftKey) {
+					// Snap translation to horizontal, vertical or 45 degrees
+					if (Math.abs(finalDx) > Math.abs(finalDy) * 2) finalDy = 0;
+					else if (Math.abs(finalDy) > Math.abs(finalDx) * 2) finalDx = 0;
+					else {
+						const signY = Math.sign(finalDy) || 1;
+						finalDy = (Math.abs(finalDx) * signY) / aspect;
+					}
+				}
+				const moved = translateShape(orig, finalDx, finalDy);
 				Object.assign(selectedShape, moved);
 				shapes = [...shapes];
 			} else if (dragState.mode === 'p0' && (selectedShape.kind === 'line' || selectedShape.kind === 'arrow')) {
+				let nx = orig.pts[0][0] + dx;
+				let ny = orig.pts[0][1] + dy;
+				if (e.shiftKey) {
+					// Snap relative to p1
+					const p1 = orig.pts[1];
+					const sx = nx - p1[0];
+					const sy = (ny - p1[1]) * aspect;
+					const ang = Math.round(Math.atan2(sy, sx) / (Math.PI / 4)) * (Math.PI / 4);
+					const dist = Math.hypot(sx, sy);
+					nx = p1[0] + dist * Math.cos(ang);
+					ny = p1[1] + (dist * Math.sin(ang)) / aspect;
+				}
 				selectedShape.pts = [
-					[Math.round((orig.pts[0][0] + dx) * 1000) / 1000, Math.round((orig.pts[0][1] + dy) * 1000) / 1000],
+					[Math.round(nx * 1000) / 1000, Math.round(ny * 1000) / 1000],
 					orig.pts[1]
 				];
 				shapes = [...shapes];
 			} else if (dragState.mode === 'p1' && (selectedShape.kind === 'line' || selectedShape.kind === 'arrow')) {
+				let nx = orig.pts[1][0] + dx;
+				let ny = orig.pts[1][1] + dy;
+				if (e.shiftKey) {
+					// Snap relative to p0
+					const p0 = orig.pts[0];
+					const sx = nx - p0[0];
+					const sy = (ny - p0[1]) * aspect;
+					const ang = Math.round(Math.atan2(sy, sx) / (Math.PI / 4)) * (Math.PI / 4);
+					const dist = Math.hypot(sx, sy);
+					nx = p0[0] + dist * Math.cos(ang);
+					ny = p0[1] + (dist * Math.sin(ang)) / aspect;
+				}
 				selectedShape.pts = [
 					orig.pts[0],
-					[Math.round((orig.pts[1][0] + dx) * 1000) / 1000, Math.round((orig.pts[1][1] + dy) * 1000) / 1000]
+					[Math.round(nx * 1000) / 1000, Math.round(ny * 1000) / 1000]
 				];
 				shapes = [...shapes];
-			} else if (selectedShape.kind === 'rect' || selectedShape.kind === 'ellipse') {
+			} else {
 				let ox = orig.x || 0;
 				let oy = orig.y || 0;
 				let ow = orig.w || 0;
 				let oh = orig.h || 0;
 
 				if (dragState.mode === 'se') {
-					selectedShape.w = Math.max(0.01, Math.round((ow + dx) * 1000) / 1000);
-					selectedShape.h = Math.max(0.01, Math.round((oh + dy) * 1000) / 1000);
+					let newW = Math.max(0.01, ow + dx);
+					let newH = Math.max(0.01, oh + dy);
+					if (e.shiftKey) newH = (newW * aspect);
+					selectedShape.w = Math.round(newW * 1000) / 1000;
+					selectedShape.h = Math.round(newH * 1000) / 1000;
 				} else if (dragState.mode === 'sw') {
 					const newW = Math.max(0.01, ow - dx);
+					let newH = Math.max(0.01, oh + dy);
+					if (e.shiftKey) newH = (newW * aspect);
 					selectedShape.x = Math.round((ox + (ow - newW)) * 1000) / 1000;
 					selectedShape.w = Math.round(newW * 1000) / 1000;
-					selectedShape.h = Math.max(0.01, Math.round((oh + dy) * 1000) / 1000);
+					selectedShape.h = Math.round(newH * 1000) / 1000;
 				} else if (dragState.mode === 'ne') {
-					selectedShape.w = Math.max(0.01, Math.round((ow + dx) * 1000) / 1000);
-					const newH = Math.max(0.01, oh - dy);
+					let newW = Math.max(0.01, ow + dx);
+					let newH = Math.max(0.01, oh - dy);
+					if (e.shiftKey) newH = (newW * aspect);
 					selectedShape.y = Math.round((oy + (oh - newH)) * 1000) / 1000;
+					selectedShape.w = Math.round(newW * 1000) / 1000;
 					selectedShape.h = Math.round(newH * 1000) / 1000;
 				} else if (dragState.mode === 'nw') {
-					const newW = Math.max(0.01, ow - dx);
-					const newH = Math.max(0.01, oh - dy);
+					let newW = Math.max(0.01, ow - dx);
+					let newH = Math.max(0.01, oh - dy);
+					if (e.shiftKey) newH = (newW * aspect);
 					selectedShape.x = Math.round((ox + (ow - newW)) * 1000) / 1000;
 					selectedShape.y = Math.round((oy + (oh - newH)) * 1000) / 1000;
 					selectedShape.w = Math.round(newW * 1000) / 1000;
@@ -444,18 +595,47 @@
 		// 2. Drawing a new shape
 		if (!isDrawing || !drawStart || !draftShape) return;
 
+		// Dynamic serpentine wave control with Alt + drag or wheel
+		if (draftShape.kind === 'serpentine' && e.altKey) {
+			const waveFactor = Math.round(Math.max(1, Math.min(40, Math.abs(pt[0] - drawStart[0]) * 100)));
+			draftShape.waves = waveFactor;
+			serpentineWaves = waveFactor;
+		}
+
 		if (currentTool === 'free') {
 			draftShape.pts = [...draftShape.pts, [Math.round(pt[0] * 1000) / 1000, Math.round(pt[1] * 1000) / 1000]];
 		} else if (currentTool === 'line' || currentTool === 'arrow') {
+			let endPt = pt;
+			if (e.shiftKey) {
+				// Snap line/arrow to 0, 45, 90, 135, 180 degrees
+				const dx = pt[0] - drawStart[0];
+				const dy = (pt[1] - drawStart[1]) * aspect;
+				const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+				const dist = Math.hypot(dx, dy);
+				endPt = [
+					drawStart[0] + dist * Math.cos(ang),
+					drawStart[1] + (dist * Math.sin(ang)) / aspect
+				];
+			}
 			draftShape.pts = [
 				[Math.round(drawStart[0] * 1000) / 1000, Math.round(drawStart[1] * 1000) / 1000],
-				[Math.round(pt[0] * 1000) / 1000, Math.round(pt[1] * 1000) / 1000]
+				[Math.round(endPt[0] * 1000) / 1000, Math.round(endPt[1] * 1000) / 1000]
 			];
-		} else if (currentTool === 'rect' || currentTool === 'ellipse') {
-			const x0 = Math.min(drawStart[0], pt[0]);
-			const y0 = Math.min(drawStart[1], pt[1]);
-			const w = Math.abs(pt[0] - drawStart[0]);
-			const h = Math.abs(pt[1] - drawStart[1]);
+		} else {
+			let x0 = Math.min(drawStart[0], pt[0]);
+			let y0 = Math.min(drawStart[1], pt[1]);
+			let w = Math.abs(pt[0] - drawStart[0]);
+			let h = Math.abs(pt[1] - drawStart[1]);
+
+			if (e.shiftKey) {
+				// 1:1 square/circle aspect ratio snap
+				const maxSide = Math.max(w, h / aspect);
+				w = maxSide;
+				h = maxSide * aspect;
+				if (pt[0] < drawStart[0]) x0 = drawStart[0] - w;
+				if (pt[1] < drawStart[1]) y0 = drawStart[1] - h;
+			}
+
 			draftShape.x = Math.round(x0 * 1000) / 1000;
 			draftShape.y = Math.round(y0 * 1000) / 1000;
 			draftShape.w = Math.round(w * 1000) / 1000;
@@ -473,12 +653,12 @@
 		if (draftShape) {
 			// Validate minimum size
 			let valid = true;
-			if (draftShape.kind === 'rect' || draftShape.kind === 'ellipse') {
-				if (draftShape.w < 0.01 && draftShape.h < 0.01) valid = false;
+			if (draftShape.kind === 'rect' || draftShape.kind === 'ellipse' || draftShape.kind === 'triangle' || draftShape.kind === 'hairpin' || draftShape.kind === 'serpentine' || draftShape.kind === 'tag') {
+				if (draftShape.w < 0.005 && draftShape.h < 0.005) valid = false;
 			} else if (draftShape.kind === 'line' || draftShape.kind === 'arrow') {
 				const dx = draftShape.pts[1][0] - draftShape.pts[0][0];
 				const dy = draftShape.pts[1][1] - draftShape.pts[0][1];
-				if (Math.hypot(dx, dy) < 0.01) valid = false;
+				if (Math.hypot(dx, dy) < 0.005) valid = false;
 			} else if (draftShape.kind === 'free') {
 				if (draftShape.pts.length < 2) valid = false;
 			}
@@ -516,6 +696,8 @@
 			y: y0 * H,
 			w: (x1 - x0) * VIEW_W,
 			h: (y1 - y0) * H,
+			cx: ((x0 + x1) / 2) * VIEW_W,
+			cy: ((y0 + y1) / 2) * H,
 			x0: x0 * VIEW_W,
 			y0: y0 * H,
 			x1: x1 * VIEW_W,
@@ -537,6 +719,25 @@
 			}
 		}
 		shapes = [...shapes];
+	}
+
+	function setShapeDurationToClip(sId: string) {
+		const s = shapes.find((x) => x.id === sId);
+		if (!s) return;
+		s.t0 = clipIn || 0;
+		s.t1 = clipOut != null ? clipOut : (duration > 0 ? duration : null);
+		shapes = [...shapes];
+		statusMsg = 'Forma ajustada a la duración total del fragmento';
+		statusKind = 'ok';
+		setTimeout(() => { statusMsg = ''; statusKind = ''; }, 2000);
+	}
+
+	function duplicateAnnotation() {
+		// Create a clone without ID so save() generates a fresh copy
+		id = '';
+		title = title ? `${title} (copia)` : 'Anotación (copia)';
+		statusMsg = 'Copia creada en el editor. Haz clic en Guardar para registrar la nueva anotación.';
+		statusKind = 'ok';
 	}
 
 	async function save() {
@@ -590,7 +791,7 @@
 			statusKind = 'ok';
 
 			const origin = typeof window !== 'undefined' ? window.location.origin : '';
-			embedCode = `<iframe src="${origin}/embed/${saved.id}" width="100%" height="480" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+			embedCode = `<iframe src="${origin}/embed/${saved.id}" width="100%" height="360" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
 
 			onSaved(saved);
 		} catch (e: any) {
@@ -602,7 +803,7 @@
 	function copyEmbed() {
 		const origin = typeof window !== 'undefined' ? window.location.origin : '';
 		const targetId = id || initialData?.id;
-		const code = embedCode || (targetId ? `<iframe src="${origin}/embed/${targetId}" width="100%" height="480" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>` : '');
+		const code = embedCode || (targetId ? `<iframe src="${origin}/embed/${targetId}" width="100%" height="360" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>` : '');
 		if (!code) return;
 		navigator.clipboard.writeText(code);
 		copied = true;
@@ -620,7 +821,7 @@
 	<!-- Top Bar -->
 	<header class="anno-bar">
 		<div class="anno-brand">
-			<a href="/" class="back-link">← Volver</a>
+			<a href="/" class="back-link" title="Volver al catálogo principal">← Volver</a>
 			<strong>{id ? 'Editar anotación' : 'Nueva anotación'}</strong>
 		</div>
 
@@ -635,26 +836,30 @@
 					rel="noreferrer"
 					class="btn btn-outline"
 					title="Abrir video original en una pestaña nueva"
+					aria-label="Abrir video original"
 				>
 					↗ Video original
 				</a>
 			{/if}
 			{#if id}
-				<button type="button" class="btn btn-outline" onclick={copyEmbed} title="Copiar código iframe directamente">
+				<button type="button" class="btn btn-outline" onclick={duplicateAnnotation} title="Duplicar esta anotación para reutilizar metadatos y fuente en otro fragmento">
+					📑 Duplicar
+				</button>
+				<button type="button" class="btn btn-outline" onclick={copyEmbed} title="Copiar código iframe directamente (altura 360)">
 					{copied ? '✓ Copiado' : '📋 Copiar iframe'}
 				</button>
 				<button type="button" class="btn btn-outline" onclick={() => {
 					const origin = typeof window !== 'undefined' ? window.location.origin : '';
 					if (!embedCode && id) {
-						embedCode = `<iframe src="${origin}/embed/${id}" width="100%" height="480" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+						embedCode = `<iframe src="${origin}/embed/${id}" width="100%" height="360" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
 					}
 					showEmbedModal = true;
-				}}>
+				}} title="Ver código embed">
 					&lt;/&gt; Ver Embed
 				</button>
-				<a href="/embed/{id}" target="_blank" class="btn btn-outline">▶ Vista Embed</a>
+				<a href="/embed/{id}" target="_blank" class="btn btn-outline" title="Abrir vista embed limpia">▶ Vista Embed</a>
 			{/if}
-			<button type="button" class="btn btn-primary" onclick={save}>
+			<button type="button" class="btn btn-primary" onclick={save} title="Guardar cambios">
 				💾 Guardar
 			</button>
 		</div>
@@ -731,7 +936,8 @@
 					{#if selectedShape && selectedBBox}
 						{@const box = selectedBBox}
 						{@const H = viewHeight(aspect)}
-						<g class="gizmo-layer">
+						{@const rot = selectedShape.rotation || 0}
+						<g class="gizmo-layer" transform={rot ? `rotate(${rot} ${box.cx} ${box.cy})` : undefined}>
 							<!-- Bounding box highlight with move cursor -->
 							<rect
 								x={box.x - 4}
@@ -742,7 +948,28 @@
 								onmousedown={(e) => startHandleDrag(e, 'move')}
 							/>
 
-							{#if selectedShape.kind === 'rect' || selectedShape.kind === 'ellipse'}
+							<!-- Rotation handle (top center stalk with rotation knob) -->
+							<line
+								x1={box.cx}
+								y1={box.y - 4}
+								x2={box.cx}
+								y2={box.y - 24}
+								class="gizmo-rot-stem"
+							/>
+							<circle
+								cx={box.cx}
+								cy={box.y - 24}
+								r={7}
+								class="gizmo-handle handle-rotate"
+								role="button"
+								tabindex={0}
+								aria-label="Arrastra para rotar"
+								onmousedown={(e) => startHandleDrag(e, 'rotate')}
+							>
+								<title>Arrastra para rotar (Mantén Shift para saltar de 45° en 45°)</title>
+							</circle>
+
+							{#if selectedShape.kind === 'rect' || selectedShape.kind === 'ellipse' || selectedShape.kind === 'triangle' || selectedShape.kind === 'hairpin' || selectedShape.kind === 'serpentine' || selectedShape.kind === 'tag'}
 								<!-- 4 corner handles -->
 								<rect
 									x={box.x - 7}
@@ -797,8 +1024,8 @@
 							{:else}
 								<!-- Center move handle for free drawing and text -->
 								<circle
-									cx={box.x + box.w / 2}
-									cy={box.y + box.h / 2}
+									cx={box.cx}
+									cy={box.cy}
 									r={9}
 									class="gizmo-handle handle-move"
 									onmousedown={(e) => startHandleDrag(e, 'move')}
@@ -809,85 +1036,144 @@
 				</svg>
 			</div>
 
-			<!-- Toolbar: Drawing Tools & Colors -->
+			<!-- Toolbar: Icon-Only Drawing Tools, Color Palette & Opacity -->
 			<div class="tools-bar">
 				<div class="tool-group">
 					<button
 						type="button"
-						class="tool-btn"
+						class="tool-btn icon-only"
 						class:active={currentTool === 'select'}
-						title="Seleccionar y transformar anotaciones"
-						onclick={() => (currentTool = 'select')}>↖ Seleccionar</button
+						title="Seleccionar y transformar (V)"
+						aria-label="Seleccionar (V)"
+						onclick={() => (currentTool = 'select')}>↖</button
 					>
 					<button
 						type="button"
-						class="tool-btn"
+						class="tool-btn icon-only"
 						class:active={currentTool === 'rect'}
-						title="Rectángulo"
-						onclick={() => (currentTool = 'rect')}>▭ Rect</button
+						title="Rectángulo (R) · Shift: cuadrado"
+						aria-label="Rectángulo (R)"
+						onclick={() => (currentTool = 'rect')}>▭</button
 					>
 					<button
 						type="button"
-						class="tool-btn"
+						class="tool-btn icon-only"
 						class:active={currentTool === 'ellipse'}
-						title="Elipse / Círculo"
-						onclick={() => (currentTool = 'ellipse')}>⬭ Círculo</button
+						title="Círculo / Elipse (O) · Shift: circular"
+						aria-label="Círculo / Elipse (O)"
+						onclick={() => (currentTool = 'ellipse')}>⬭</button
 					>
 					<button
 						type="button"
-						class="tool-btn"
+						class="tool-btn icon-only"
+						class:active={currentTool === 'triangle'}
+						title="Triángulo (cerrado con base)"
+						aria-label="Triángulo"
+						onclick={() => (currentTool = 'triangle')}>△</button
+					>
+					<button
+						type="button"
+						class="tool-btn icon-only"
+						class:active={currentTool === 'hairpin'}
+						title="Regulador / Hairpin dinámico (triángulo abierto sin base)"
+						aria-label="Regulador dinámico"
+						onclick={() => (currentTool = 'hairpin')}>⋖</button
+					>
+					<button
+						type="button"
+						class="tool-btn icon-only"
 						class:active={currentTool === 'line'}
-						title="Línea recta"
-						onclick={() => (currentTool = 'line')}>╱ Línea</button
+						title="Línea recta (L) · Shift: 45°/90°"
+						aria-label="Línea recta (L)"
+						onclick={() => (currentTool = 'line')}>╱</button
 					>
 					<button
 						type="button"
-						class="tool-btn"
+						class="tool-btn icon-only"
 						class:active={currentTool === 'arrow'}
-						title="Flecha indicadora"
-						onclick={() => (currentTool = 'arrow')}>↗ Flecha</button
+						title="Flecha indicadora (A) · Shift: 45°/90°"
+						aria-label="Flecha indicadora (A)"
+						onclick={() => (currentTool = 'arrow')}>↗</button
 					>
 					<button
 						type="button"
-						class="tool-btn"
+						class="tool-btn icon-only"
+						class:active={currentTool === 'serpentine'}
+						title="Línea serpentina / ondulada (Alt al dibujar: ajusta ondas de 1 a 40)"
+						aria-label="Línea serpentina"
+						onclick={() => (currentTool = 'serpentine')}>〰</button
+					>
+					<button
+						type="button"
+						class="tool-btn icon-only"
 						class:active={currentTool === 'free'}
-						title="Dibujo a mano alzada"
-						onclick={() => (currentTool = 'free')}>✎ Libre</button
+						title="Dibujo a mano alzada (D)"
+						aria-label="Dibujo libre (D)"
+						onclick={() => (currentTool = 'free')}>✎</button
 					>
 					<button
 						type="button"
-						class="tool-btn"
+						class="tool-btn icon-only"
 						class:active={currentTool === 'text'}
-						title="Añadir texto"
-						onclick={() => (currentTool = 'text')}>T Texto</button
+						title="Texto (T)"
+						aria-label="Texto (T)"
+						onclick={() => (currentTool = 'text')}>T</button
+					>
+					<button
+						type="button"
+						class="tool-btn icon-only"
+						class:active={currentTool === 'tag'}
+						title="Etiqueta temporal (Tag de fragmento que se refleja en metadatos)"
+						aria-label="Etiqueta temporal"
+						onclick={() => (currentTool = 'tag')}>🏷</button
 					>
 				</div>
 
-				<div class="palette-group">
-					{#each PALETTE as col}
+				<div class="palette-container">
+					<div class="palette-group">
+						{#each PALETTE as col}
+							<button
+								type="button"
+								class="color-dot"
+								class:active={currentColor === col}
+								style="background: {col}"
+								title="Color {col}"
+								aria-label="Color {col}"
+								onclick={() => (currentColor = col)}
+							></button>
+						{/each}
+					</div>
+					<div class="opacity-row">
 						<button
 							type="button"
-							class="color-dot"
-							class:active={currentColor === col}
-							style="background: {col}"
-							aria-label="Color {col}"
-							onclick={() => (currentColor = col)}
-						></button>
-					{/each}
+							class="btn-opacity"
+							class:active={currentOpacity === 0.5}
+							title="Alternar transparencia 50% para formas nuevas o seleccionadas"
+							onclick={() => {
+								currentOpacity = currentOpacity === 0.5 ? 1 : 0.5;
+								if (selectedShape) {
+									selectedShape.opacity = currentOpacity;
+									shapes = [...shapes];
+								}
+							}}
+						>
+							Transparencia 50% {currentOpacity === 0.5 ? '✓' : ''}
+						</button>
+					</div>
 				</div>
 
 				<div class="stroke-group">
-					<label class="stroke-label">
+					<label class="stroke-label" title="Grosor de trazo en píxeles">
 						Grosor:
 						<select bind:value={strokeWidth}>
-							<option value={2}>Fino (2px)</option>
-							<option value={4}>Medio (4px)</option>
-							<option value={8}>Grueso (8px)</option>
-							<option value={14}>Marcador (14px)</option>
+							<option value={2}>2px</option>
+							<option value={4}>4px</option>
+							<option value={8}>8px</option>
+							<option value={14}>14px</option>
 						</select>
 					</label>
 
-					<label class="fill-checkbox">
+					<label class="fill-checkbox" title="Rellenar figuras cerradas">
 						<input type="checkbox" bind:checked={fillEnabled} />
 						Relleno
 					</label>
@@ -897,43 +1183,75 @@
 			<!-- Playback Scrubber & Clip Trim Controls -->
 			<div class="controls-panel">
 				<div class="transport-row">
-					<button type="button" class="btn-play" onclick={togglePlay}>
+					<button type="button" class="btn-play" onclick={togglePlay} title="Reproducir / Pausar (Espacio)">
 						{isPlaying ? '⏸ Pausa' : '▶ Play'}
 					</button>
 
-					<button type="button" class="btn btn-xs" onclick={() => seekTo(currentTime - 2)}>-2s</button>
-					<button type="button" class="btn btn-xs" onclick={() => seekTo(currentTime + 2)}>+2s</button>
+					<button type="button" class="btn btn-xs" onclick={() => seekTo(clipIn || 0)} title="Rebobinar al inicio del fragmento (0)">|◀ 0</button>
+					<button type="button" class="btn btn-xs" onclick={() => seekTo(currentTime - 2)} title="Retroceder 2 segundos">-2s</button>
+					<button type="button" class="btn btn-xs" onclick={() => seekTo(currentTime + 2)} title="Avanzar 2 segundos">+2s</button>
 
 					<span class="time-display">
 						{formatTime(currentTime, true)} / {formatTime(duration)}
 					</span>
 
 					<div class="clip-actions">
-						<button
-							type="button"
-							class="btn btn-xs"
-							class:active={clipIn > 0}
-							title="Establecer inicio del recorte en el momento actual"
-							onclick={setClipIn}
-						>
-							[ Inicio ({formatTime(clipIn)})
-						</button>
-						<button
-							type="button"
-							class="btn btn-xs"
-							class:active={clipOut != null}
-							title="Establecer fin del recorte en el momento actual"
-							onclick={setClipOut}
-						>
-							Fin ] ({clipOut != null ? formatTime(clipOut) : '∞'})
-						</button>
+						<div class="clip-time-field">
+							<span class="clip-lbl">In:</span>
+							<input
+								type="number"
+								step="0.1"
+								min="0"
+								class="clip-num-input"
+								value={clipIn}
+								title="Segundo de inicio del fragmento (editable)"
+								oninput={(e) => {
+									const v = Number((e.target as HTMLInputElement).value);
+									if (Number.isFinite(v) && v >= 0) clipIn = v;
+								}}
+							/>
+							<button
+								type="button"
+								class="btn-icon-fix"
+								title="Fijar inicio del recorte en el momento actual"
+								onclick={setClipIn}
+							>
+								📍
+							</button>
+						</div>
+
+						<div class="clip-time-field">
+							<span class="clip-lbl">Out:</span>
+							<input
+								type="number"
+								step="0.1"
+								min="0"
+								class="clip-num-input"
+								value={clipOut ?? ''}
+								placeholder="∞"
+								title="Segundo de fin del fragmento (editable)"
+								oninput={(e) => {
+									const val = (e.target as HTMLInputElement).value;
+									clipOut = val === '' ? null : Number(val);
+								}}
+							/>
+							<button
+								type="button"
+								class="btn-icon-fix"
+								title="Fijar fin del recorte en el momento actual"
+								onclick={setClipOut}
+							>
+								📍
+							</button>
+						</div>
+
 						{#if clipIn > 0 || clipOut != null}
-							<button type="button" class="btn btn-xs btn-link" onclick={clearClip}>×</button>
+							<button type="button" class="btn btn-xs btn-link" title="Limpiar recorte" onclick={clearClip}>×</button>
 						{/if}
 					</div>
 				</div>
 
-				<!-- Interactive Scrubber Bar with cues -->
+				<!-- Interactive Scrubber Bar with cues and draggable clip handles -->
 				<div class="scrubber-wrapper">
 					<!-- Range track -->
 					<input
@@ -947,6 +1265,28 @@
 						onmouseup={() => (isScrubbing = false)}
 						oninput={(e) => seekTo(Number((e.target as HTMLInputElement).value))}
 					/>
+
+					<!-- Fragment In indicator (Green vertical handle, draggable via slider input) -->
+					{#if duration > 0 && clipIn > 0}
+						<div
+							class="clip-marker marker-in"
+							style="left: {(clipIn / duration) * 100}%;"
+							title="Inicio de fragmento ({formatTime(clipIn)})"
+						>
+							<span class="marker-tip">IN</span>
+						</div>
+					{/if}
+
+					<!-- Fragment Out indicator (Red vertical handle) -->
+					{#if duration > 0 && clipOut != null}
+						<div
+							class="clip-marker marker-out"
+							style="left: {(clipOut / duration) * 100}%;"
+							title="Fin de fragmento ({formatTime(clipOut)})"
+						>
+							<span class="marker-tip">OUT</span>
+						</div>
+					{/if}
 
 					<!-- Cues indicators -->
 					<div class="cues-layer">
@@ -969,40 +1309,77 @@
 			{#if selectedShape}
 				<div class="shape-inspector">
 					<div class="inspector-header">
-						<strong>Forma seleccionada: {selectedShape.kind}</strong>
-						<button type="button" class="btn btn-xs btn-danger" onclick={() => removeShape(selectedShape.id)}>
-							Eliminar forma
-						</button>
+						<strong>Forma: {selectedShape.kind}</strong>
+						<div class="inspector-actions">
+							<button
+								type="button"
+								class="btn btn-xs btn-outline"
+								title="Hacer que la forma dure la longitud total del fragmento"
+								onclick={() => setShapeDurationToClip(selectedShape.id)}
+							>
+								⏱ Duración total
+							</button>
+							<button type="button" class="btn btn-xs btn-danger" title="Eliminar forma (Backspace)" onclick={() => removeShape(selectedShape.id)}>
+								✕ Eliminar
+							</button>
+						</div>
 					</div>
 
 					<div class="inspector-controls">
 						<div class="time-adjust">
-							<span>Aparición (t0): <strong>{formatTime(selectedShape.t0, true)}</strong></span>
-							<button type="button" class="btn btn-xs" onclick={() => updateSelectedShapeTime('t0')}>
-								Fijar a actual ({formatTime(currentTime)})
+							<span>t0:</span>
+							<input
+								type="number"
+								step="0.1"
+								min="0"
+								class="inline-time-input"
+								bind:value={selectedShape.t0}
+								title="Segundo de aparición (editable)"
+							/>
+							<button
+								type="button"
+								class="btn-icon-fix"
+								title="Fijar aparición al momento actual"
+								onclick={() => updateSelectedShapeTime('t0')}
+							>
+								📍
 							</button>
 						</div>
 
 						<div class="time-adjust">
-							<span
-								>Desaparición (t1): <strong
-									>{selectedShape.t1 != null ? formatTime(selectedShape.t1, true) : 'Siempre'}</strong
-								></span
+							<span>t1:</span>
+							<input
+								type="number"
+								step="0.1"
+								min="0"
+								class="inline-time-input"
+								value={selectedShape.t1 ?? ''}
+								placeholder="∞"
+								title="Segundo de desaparición (editable)"
+								oninput={(e) => {
+									const v = (e.target as HTMLInputElement).value;
+									selectedShape.t1 = v === '' ? null : Number(v);
+								}}
+							/>
+							<button
+								type="button"
+								class="btn-icon-fix"
+								title="Fijar desaparición al momento actual"
+								onclick={() => updateSelectedShapeTime('t1')}
 							>
-							<button type="button" class="btn btn-xs" onclick={() => updateSelectedShapeTime('t1')}>
-								Fijar a actual ({formatTime(currentTime)})
+								📍
 							</button>
 						</div>
 
 						<div class="color-adjust">
-							<span>Color:</span>
 							<div class="mini-palette">
-								{#each PALETTE.slice(0, 7) as col}
+								{#each PALETTE.slice(0, 8) as col}
 									<button
 										type="button"
 										class="color-dot-sm"
 										class:active={selectedShape.color === col}
 										style="background: {col}"
+										title="Color {col}"
 										onclick={() => {
 											selectedShape.color = col;
 											shapes = [...shapes];
@@ -1010,6 +1387,35 @@
 									></button>
 								{/each}
 							</div>
+						</div>
+
+						<!-- Rotation & Opacity controls -->
+						<div class="shape-extra-controls">
+							<label class="rot-label" title="Ángulo de rotación en grados">
+								Rot:
+								<input
+									type="number"
+									step="1"
+									class="inline-rot-input"
+									value={selectedShape.rotation || 0}
+									oninput={(e) => {
+										selectedShape.rotation = Number((e.target as HTMLInputElement).value) || 0;
+										shapes = [...shapes];
+									}}
+								/>°
+							</label>
+							<button
+								type="button"
+								class="btn btn-xs"
+								class:active={selectedShape.opacity === 0.5}
+								title="Alternar transparencia 50%"
+								onclick={() => {
+									selectedShape.opacity = selectedShape.opacity === 0.5 ? 1 : 0.5;
+									shapes = [...shapes];
+								}}
+							>
+								Opacidad 50%
+							</button>
 						</div>
 					</div>
 				</div>
@@ -1024,6 +1430,43 @@
 				<div class="form-field">
 					<label for="f-title">Título de la anotación</label>
 					<input id="f-title" type="text" bind:value={title} placeholder="Ej: Análisis formal - Compás 1-16" />
+				</div>
+
+				<!-- Fragment / Meta-cut period of time -->
+				<div class="meta-cut-box">
+					<div class="meta-cut-header">
+						<strong>Fragmento / Meta-cut de la pieza</strong>
+						<small>Período de tiempo seleccionado</small>
+					</div>
+					<div class="meta-cut-inputs">
+						<div class="meta-cut-col">
+							<label for="f-clip-in">Inicio (segundos):</label>
+							<input
+								id="f-clip-in"
+								type="number"
+								step="0.1"
+								min="0"
+								bind:value={clipIn}
+								title="Inicio del fragmento analizado"
+							/>
+						</div>
+						<div class="meta-cut-col">
+							<label for="f-clip-out">Fin (segundos):</label>
+							<input
+								id="f-clip-out"
+								type="number"
+								step="0.1"
+								min="0"
+								placeholder="Fin del video"
+								value={clipOut ?? ''}
+								oninput={(e) => {
+									const v = (e.target as HTMLInputElement).value;
+									clipOut = v === '' ? null : Number(v);
+								}}
+								title="Fin del fragmento analizado"
+							/>
+						</div>
+					</div>
 				</div>
 
 				<div class="form-grid">
@@ -1088,14 +1531,49 @@
 								<span class="shape-badge" style="background: {s.color};"></span>
 								<div class="shape-desc">
 									<span class="shape-kind">{s.kind}</span>
-									<span class="shape-timing">{formatTime(s.t0)} → {s.t1 != null ? formatTime(s.t1) : 'fin'}</span>
+									<span class="shape-timing">
+										<input
+											type="number"
+											step="0.1"
+											min="0"
+											class="item-time-input"
+											bind:value={s.t0}
+											onclick={(e) => e.stopPropagation()}
+											title="Editar inicio de aparición"
+										/>
+										→
+										<input
+											type="number"
+											step="0.1"
+											min="0"
+											class="item-time-input"
+											value={s.t1 ?? ''}
+											placeholder="∞"
+											onclick={(e) => e.stopPropagation()}
+											oninput={(e) => {
+												const v = (e.target as HTMLInputElement).value;
+												s.t1 = v === '' ? null : Number(v);
+											}}
+											title="Editar fin de aparición"
+										/>
+									</span>
 									{#if s.text}
 										<small class="shape-txt">"{s.text}"</small>
 									{/if}
 								</div>
 								<button
 									type="button"
+									class="btn-total-dur"
+									title="Ajustar a la duración total del fragmento"
+									onclick={(e) => {
+										e.stopPropagation();
+										setShapeDurationToClip(s.id);
+									}}>⏱</button
+								>
+								<button
+									type="button"
 									class="btn-del"
+									title="Eliminar forma"
 									onclick={(e) => {
 										e.stopPropagation();
 										removeShape(s.id);
@@ -1399,6 +1877,22 @@
 		cursor: move;
 	}
 
+	.gizmo-rot-stem {
+		stroke: #3b82f6;
+		stroke-width: 1.5;
+		stroke-dasharray: 2 2;
+	}
+
+	.gizmo-handle.handle-rotate {
+		fill: #ffd60a;
+		stroke: #b45309;
+		stroke-width: 2;
+		cursor: grab;
+	}
+	.gizmo-handle.handle-rotate:active {
+		cursor: grabbing;
+	}
+
 	.tools-bar {
 		display: flex;
 		flex-wrap: wrap;
@@ -1413,6 +1907,7 @@
 
 	.tool-group {
 		display: flex;
+		flex-wrap: wrap;
 		gap: 4px;
 	}
 
@@ -1426,6 +1921,15 @@
 		cursor: pointer;
 		transition: all 0.15s;
 	}
+	.tool-btn.icon-only {
+		width: 32px;
+		height: 32px;
+		padding: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 15px;
+	}
 	.tool-btn:hover {
 		background: #282e3b;
 		color: #fff;
@@ -1436,9 +1940,35 @@
 		color: #fff;
 	}
 
+	.palette-container {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
 	.palette-group {
 		display: flex;
 		gap: 6px;
+	}
+
+	.opacity-row {
+		display: flex;
+	}
+
+	.btn-opacity {
+		background: #1e222b;
+		border: 1px solid #2c323f;
+		color: #9ba3af;
+		font-size: 10px;
+		padding: 2px 6px;
+		border-radius: 3px;
+		cursor: pointer;
+		transition: all 0.15s;
+	}
+	.btn-opacity.active {
+		background: #3b82f6;
+		color: #fff;
+		border-color: #60a5fa;
 	}
 
 	.color-dot {
@@ -1487,7 +2017,8 @@
 	.transport-row {
 		display: flex;
 		align-items: center;
-		gap: 10px;
+		flex-wrap: wrap;
+		gap: 8px;
 	}
 
 	.btn-play {
@@ -1512,19 +2043,56 @@
 		margin-left: auto;
 		display: flex;
 		align-items: center;
-		gap: 6px;
+		gap: 8px;
 	}
 
-	.clip-actions .btn.active {
-		background: #374151;
+	.clip-time-field {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		background: #0d0f12;
+		border: 1px solid #2a2f3b;
+		padding: 2px 4px;
+		border-radius: 4px;
+	}
+
+	.clip-lbl {
+		font-size: 10px;
+		font-weight: 600;
+		color: #9ba3af;
+	}
+
+	.clip-num-input {
+		width: 44px;
+		background: transparent;
+		border: none;
 		color: #60a5fa;
-		border-color: #60a5fa;
+		font-family: monospace;
+		font-size: 11px;
+		padding: 0;
+	}
+	.clip-num-input:focus {
+		outline: none;
+	}
+
+	.btn-icon-fix {
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		font-size: 12px;
+		padding: 0 2px;
+		opacity: 0.8;
+		transition: transform 0.15s, opacity 0.15s;
+	}
+	.btn-icon-fix:hover {
+		opacity: 1;
+		transform: scale(1.2);
 	}
 
 	.scrubber-wrapper {
 		position: relative;
 		width: 100%;
-		height: 22px;
+		height: 28px;
 		display: flex;
 		align-items: center;
 	}
@@ -1534,6 +2102,37 @@
 		accent-color: #3b82f6;
 		cursor: pointer;
 		z-index: 2;
+	}
+
+	.clip-marker {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 3px;
+		pointer-events: none;
+		z-index: 4;
+	}
+	.clip-marker.marker-in {
+		background: #22c55e;
+	}
+	.clip-marker.marker-out {
+		background: #ef4444;
+	}
+	.marker-tip {
+		position: absolute;
+		top: -14px;
+		left: -8px;
+		font-size: 9px;
+		font-weight: 700;
+		padding: 1px 3px;
+		border-radius: 2px;
+		color: #fff;
+	}
+	.marker-in .marker-tip {
+		background: #22c55e;
+	}
+	.marker-out .marker-tip {
+		background: #ef4444;
 	}
 
 	.cues-layer {
@@ -1550,8 +2149,8 @@
 	.cue-tick {
 		position: absolute;
 		width: 4px;
-		height: 10px;
-		margin-top: -1px;
+		height: 12px;
+		margin-top: -2px;
 		border-radius: 2px;
 		border: 1px solid #000;
 		pointer-events: auto;
@@ -1580,11 +2179,17 @@
 		font-size: 13px;
 	}
 
+	.inspector-actions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
 	.inspector-controls {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 16px;
+		gap: 14px;
 		font-size: 12px;
 	}
 
@@ -1593,6 +2198,115 @@
 		display: flex;
 		align-items: center;
 		gap: 6px;
+	}
+
+	.inline-time-input {
+		width: 50px;
+		background: #0d0f12;
+		border: 1px solid #2a2f3b;
+		color: #e4e7eb;
+		font-family: monospace;
+		font-size: 11px;
+		padding: 2px 4px;
+		border-radius: 3px;
+	}
+
+	.shape-extra-controls {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.rot-label {
+		display: flex;
+		align-items: center;
+		gap: 3px;
+		font-size: 11px;
+		color: #9ba3af;
+	}
+
+	.inline-rot-input {
+		width: 40px;
+		background: #0d0f12;
+		border: 1px solid #2a2f3b;
+		color: #ffd60a;
+		font-family: monospace;
+		font-size: 11px;
+		padding: 2px 4px;
+		border-radius: 3px;
+	}
+
+	.meta-cut-box {
+		background: #0d0f12;
+		border: 1px solid #2a2f3b;
+		border-radius: 6px;
+		padding: 8px 10px;
+		margin-bottom: 12px;
+	}
+
+	.meta-cut-header {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		margin-bottom: 8px;
+	}
+	.meta-cut-header strong {
+		font-size: 12px;
+		color: #60a5fa;
+	}
+	.meta-cut-header small {
+		font-size: 10px;
+		color: #9ba3af;
+	}
+
+	.meta-cut-inputs {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 8px;
+	}
+
+	.meta-cut-col {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+	.meta-cut-col label {
+		font-size: 10px;
+		color: #9ba3af;
+	}
+	.meta-cut-col input {
+		background: #14171d;
+		border: 1px solid #2a2f3b;
+		color: #fff;
+		padding: 4px 6px;
+		font-family: monospace;
+		font-size: 12px;
+		border-radius: 4px;
+	}
+
+	.item-time-input {
+		width: 42px;
+		background: #14171d;
+		border: 1px solid #2a2f3b;
+		color: #cbd5e1;
+		font-family: monospace;
+		font-size: 10px;
+		padding: 1px 3px;
+		border-radius: 3px;
+	}
+
+	.btn-total-dur {
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		font-size: 13px;
+		padding: 0 4px;
+		opacity: 0.7;
+		transition: opacity 0.15s, transform 0.15s;
+	}
+	.btn-total-dur:hover {
+		opacity: 1;
+		transform: scale(1.15);
 	}
 
 	.mini-palette {

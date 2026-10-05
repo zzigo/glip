@@ -117,7 +117,7 @@
 
 	function copyEmbed(id: string) {
 		const origin = typeof window !== 'undefined' ? window.location.origin : '';
-		const code = `<iframe src="${origin}/embed/${id}" width="100%" height="480" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+		const code = `<iframe src="${origin}/embed/${id}" width="100%" height="360" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
 		navigator.clipboard.writeText(code);
 		showToast('✓ Código iframe copiado para Obsidian / web');
 	}

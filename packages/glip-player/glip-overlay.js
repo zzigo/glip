@@ -33,8 +33,21 @@ export function prepareOverlay(svg, aspect) {
 export function shapeNode(s, aspect, opts = {}) {
   const W = VIEW_W;
   const H = viewHeight(aspect);
+  const opacity = s.opacity != null ? s.opacity : 1;
   const stroke = { stroke: s.color, 'stroke-width': s.width, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
-  const g = el('g', { 'data-id': s.id, class: `glip-shape glip-${s.kind}${opts.draft ? ' is-draft' : ''}` });
+  /** @type {Record<string, any>} */
+  const gAttrs = { 'data-id': s.id, class: `glip-shape glip-${s.kind}${opts.draft ? ' is-draft' : ''}` };
+  if (opacity < 0.99) gAttrs.opacity = opacity;
+
+  // Rotation transform around bounding box center
+  if (s.rotation && !opts.draft) {
+    const [x0, y0, x1, y1] = shapeBBox(s, aspect);
+    const cx = ((x0 + x1) / 2) * W;
+    const cy = ((y0 + y1) / 2) * H;
+    gAttrs.transform = `rotate(${s.rotation} ${cx} ${cy})`;
+  }
+
+  const g = el('g', gAttrs);
 
   if (s.kind === 'rect') {
     g.append(el('rect', { x: (s.x || 0) * W, y: (s.y || 0) * H, width: (s.w || 0) * W, height: (s.h || 0) * H, fill: s.fill ? s.color : 'none', 'fill-opacity': s.fill ? 0.28 : 0, ...stroke }));
@@ -42,6 +55,62 @@ export function shapeNode(s, aspect, opts = {}) {
     const rx = ((s.w || 0) * W) / 2;
     const ry = ((s.h || 0) * H) / 2;
     g.append(el('ellipse', { cx: (s.x || 0) * W + rx, cy: (s.y || 0) * H + ry, rx, ry, fill: s.fill ? s.color : 'none', 'fill-opacity': s.fill ? 0.28 : 0, ...stroke }));
+  } else if (s.kind === 'triangle') {
+    const x = (s.x || 0) * W;
+    const y = (s.y || 0) * H;
+    const w = (s.w || 0) * W;
+    const h = (s.h || 0) * H;
+    const points = `${x + w / 2},${y} ${x + w},${y + h} ${x},${y + h}`;
+    g.append(el('polygon', { points, fill: s.fill ? s.color : 'none', 'fill-opacity': s.fill ? 0.28 : 0, ...stroke }));
+  } else if (s.kind === 'hairpin') {
+    // Dynamic hairpin (open crescendo/diminuendo triangle without base)
+    const x = (s.x || 0) * W;
+    const y = (s.y || 0) * H;
+    const w = (s.w || 0) * W;
+    const h = (s.h || 0) * H;
+    const points = `${x + w},${y} ${x},${y + h / 2} ${x + w},${y + h}`;
+    g.append(el('polyline', { points, fill: 'none', ...stroke }));
+  } else if (s.kind === 'serpentine') {
+    // Waveform / serpentine zig-zag
+    const x = (s.x || 0) * W;
+    const y = (s.y || 0) * H;
+    const w = (s.w || 0) * W;
+    const h = (s.h || 0) * H;
+    const n = Math.max(1, s.waves || 8);
+    const step = w / (n * 2);
+    const pts = [];
+    pts.push(`${x},${y + h / 2}`);
+    for (let i = 0; i < n; i++) {
+      const xTop = x + (i * 2 + 0.5) * step;
+      const xMid = x + (i * 2 + 1) * step;
+      const xBot = x + (i * 2 + 1.5) * step;
+      const xEnd = x + (i * 2 + 2) * step;
+      pts.push(`${xTop},${y}`);
+      pts.push(`${xMid},${y + h / 2}`);
+      pts.push(`${xBot},${y + h}`);
+      pts.push(`${xEnd},${y + h / 2}`);
+    }
+    g.append(el('polyline', { points: pts.join(' '), fill: 'none', ...stroke }));
+  } else if (s.kind === 'tag') {
+    // Temporal tag marker
+    const x = (s.x || 0) * W;
+    const y = (s.y || 0) * H;
+    const textStr = s.text || 'TAG';
+    const tagH = 26;
+    const pad = 10;
+    const tagW = Math.max(48, textStr.length * 9 + pad * 2);
+    g.append(el('rect', { x, y, width: tagW, height: tagH, rx: 6, fill: s.color, 'fill-opacity': 0.88, stroke: '#000', 'stroke-width': 1.5 }));
+    const tagText = el('text', {
+      x: x + pad,
+      y: y + tagH / 2,
+      'font-size': 13,
+      'font-weight': 'bold',
+      'font-family': 'ui-monospace, monospace',
+      'dominant-baseline': 'central',
+      fill: '#000000',
+    });
+    tagText.textContent = textStr;
+    g.append(tagText);
   } else if (s.kind === 'line' || s.kind === 'arrow') {
     const [[ax, ay], [bx, by]] = /** @type {[number, number][]} */ (s.pts);
     const x0 = ax * W, y0 = ay * H, x1 = bx * W, y1 = by * H;

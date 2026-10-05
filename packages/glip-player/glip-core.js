@@ -20,7 +20,7 @@ export const PALETTE = [
   '#111111', // black
 ];
 
-export const SHAPE_KINDS = ['rect', 'ellipse', 'line', 'arrow', 'free', 'text'];
+export const SHAPE_KINDS = ['rect', 'ellipse', 'line', 'arrow', 'free', 'text', 'triangle', 'hairpin', 'serpentine', 'tag'];
 export const PROVIDERS = ['youtube', 'vimeo', 'file'];
 
 /** Overlay coordinate system: x ∈ [0, VIEW_W]; y ∈ [0, VIEW_W / aspect]. */
@@ -202,10 +202,10 @@ export function normalizeTags(raw) {
 
 /**
  * @typedef {{
- *   id: string, kind: 'rect'|'ellipse'|'line'|'arrow'|'free'|'text',
+ *   id: string, kind: 'rect'|'ellipse'|'line'|'arrow'|'free'|'text'|'triangle'|'hairpin'|'serpentine'|'tag',
  *   t0: number, t1: number | null, color: string, width: number, fill?: boolean,
- *   x?: number, y?: number, w?: number, h?: number,
- *   pts?: [number, number][], text?: string, size?: number
+ *   x?: number, y?: number, w?: number, h?: number, rotation?: number, opacity?: number,
+ *   pts?: [number, number][], text?: string, size?: number, waves?: number
  * }} Shape
  */
 
@@ -228,13 +228,25 @@ export function normalizeShape(s) {
     color: typeof s.color === 'string' && COLOR.test(s.color) ? s.color.toLowerCase() : PALETTE[0],
     width: r2(clamp(num(s.width, 4), 0.5, 40)),
   };
-  if (s.kind === 'rect' || s.kind === 'ellipse') {
+  if (s.rotation != null && Number.isFinite(Number(s.rotation))) {
+    out.rotation = r2(num(s.rotation) % 360);
+  }
+  if (s.opacity != null && Number.isFinite(Number(s.opacity))) {
+    out.opacity = r2(clamp(num(s.opacity, 1), 0.05, 1));
+  }
+  if (s.kind === 'rect' || s.kind === 'ellipse' || s.kind === 'triangle' || s.kind === 'hairpin' || s.kind === 'serpentine' || s.kind === 'tag') {
     let x = coord(s.x), y = coord(s.y), w = num(s.w), h = num(s.h);
     if (w < 0) { x = coord(x + w); w = -w; }
     if (h < 0) { y = coord(y + h); h = -h; }
     out.x = x; out.y = y; out.w = r4(clamp(w, 0, 1.5)); out.h = r4(clamp(h, 0, 1.5));
-    if (out.w < 0.002 && out.h < 0.002) return null;
+    if (out.w < 0.002 && out.h < 0.002 && s.kind !== 'tag') return null;
     if (s.fill) out.fill = true;
+    if (s.kind === 'serpentine') {
+      out.waves = Math.round(clamp(num(s.waves, 8), 1, 40));
+    }
+    if (s.kind === 'tag') {
+      out.text = str(s.text || 'Tag', 100);
+    }
   } else if (s.kind === 'line' || s.kind === 'arrow' || s.kind === 'free') {
     const pts = Array.isArray(s.pts) ? s.pts : [];
     const clean = [];
