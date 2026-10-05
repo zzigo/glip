@@ -1371,6 +1371,23 @@
 							</button>
 						</div>
 
+						{#if selectedShape.kind === 'text' || selectedShape.kind === 'tag'}
+							<div class="shape-text-adjust">
+								<span>Texto:</span>
+								<input
+									type="text"
+									class="inline-text-edit"
+									value={selectedShape.text || ''}
+									placeholder={selectedShape.kind === 'tag' ? 'Nombre del tag...' : 'Texto...'}
+									title="Editar texto"
+									oninput={(e) => {
+										selectedShape.text = (e.target as HTMLInputElement).value;
+										shapes = [...shapes];
+									}}
+								/>
+							</div>
+						{/if}
+
 						<div class="color-adjust">
 							<div class="mini-palette">
 								{#each PALETTE.slice(0, 8) as col}
@@ -1557,8 +1574,19 @@
 											title="Editar fin de aparición"
 										/>
 									</span>
-									{#if s.text}
-										<small class="shape-txt">"{s.text}"</small>
+									{#if s.kind === 'text' || s.kind === 'tag' || s.text != null}
+										<input
+											type="text"
+											class="item-text-input"
+											value={s.text || ''}
+											placeholder={s.kind === 'tag' ? 'Tag...' : 'Texto...'}
+											onclick={(e) => e.stopPropagation()}
+											oninput={(e) => {
+												s.text = (e.target as HTMLInputElement).value;
+												shapes = [...shapes];
+											}}
+											title="Editar texto"
+										/>
 									{/if}
 								</div>
 								<button
@@ -2194,10 +2222,26 @@
 	}
 
 	.time-adjust,
-	.color-adjust {
+	.color-adjust,
+	.shape-text-adjust {
 		display: flex;
 		align-items: center;
 		gap: 6px;
+	}
+
+	.inline-text-edit {
+		min-width: 130px;
+		max-width: 200px;
+		background: #0d0f12;
+		border: 1px solid #2a2f3b;
+		color: #e4e7eb;
+		font-size: 11px;
+		padding: 3px 6px;
+		border-radius: 4px;
+	}
+	.inline-text-edit:focus {
+		outline: none;
+		border-color: #3b82f6;
 	}
 
 	.inline-time-input {
@@ -2293,6 +2337,23 @@
 		font-size: 10px;
 		padding: 1px 3px;
 		border-radius: 3px;
+	}
+
+	.item-text-input {
+		background: #14171d;
+		border: 1px solid #2a2f3b;
+		color: #e2e8f0;
+		font-size: 11px;
+		padding: 2px 5px;
+		border-radius: 3px;
+		width: 100%;
+		max-width: 150px;
+		margin-top: 3px;
+	}
+	.item-text-input:focus {
+		outline: none;
+		border-color: #3b82f6;
+		background: #0d0f12;
 	}
 
 	.btn-total-dur {

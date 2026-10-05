@@ -53,6 +53,8 @@ input[type=range]{width:100%;margin:0;accent-color:var(--glip-accent,#ffd60a);cu
 
 const ICON_PLAY = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z"/></svg>';
+const ICON_VOL = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5L4.5 6H1.5v4h3L8 13.5v-11zM11 5a4.5 4.5 0 010 6M12.5 3a7 7 0 010 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+const ICON_MUTE = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5L4.5 6H1.5v4h3L8 13.5v-11z" fill="currentColor"/><path d="M11 6l4 4M15 6l-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
 
 export class GlipPlayerElement extends HTMLElement {
   static get observedAttributes() { return ['src']; }
@@ -68,6 +70,7 @@ export class GlipPlayerElement extends HTMLElement {
         <div class="msg" hidden></div>
         <div class="bar" part="bar">
           <button type="button" class="play" aria-label="Play">${ICON_PLAY}</button>
+          <button type="button" class="vol" aria-label="Silenciar / Activar sonido">${ICON_VOL}</button>
           <span class="t now">0:00</span>
           <div class="track"><div class="cues"></div><input type="range" min="0" max="1" step="0.05" value="0" aria-label="Seek"></div>
           <span class="t dur">0:00</span>
@@ -93,7 +96,11 @@ export class GlipPlayerElement extends HTMLElement {
 
   connectedCallback() {
     const $ = this._$;
-    $('.play').addEventListener('click', () => this.toggle());
+    $('.play').addEventListener('click', () => {
+      if (this.muted && !this.hasAttribute('muted')) this.setMuted(false);
+      this.toggle();
+    });
+    $('.vol')?.addEventListener('click', () => this.toggleMute());
     const range = $('input[type=range]');
     range.addEventListener('pointerdown', () => (this._scrubbing = true));
     range.addEventListener('pointerup', () => (this._scrubbing = false));
@@ -101,7 +108,12 @@ export class GlipPlayerElement extends HTMLElement {
     range.addEventListener('change', () => (this._scrubbing = false));
     this.addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement && e.key !== ' ') return;
-      if (e.key === ' ' || e.key === 'k') { e.preventDefault(); this.toggle(); }
+      if (e.key === ' ' || e.key === 'k') {
+        e.preventDefault();
+        if (this.muted && !this.hasAttribute('muted')) this.setMuted(false);
+        this.toggle();
+      }
+      else if (e.key === 'm') { e.preventDefault(); this.toggleMute(); }
       else if (e.key === 'ArrowRight') this.seek(this.currentTime + (e.shiftKey ? 5 : 1));
       else if (e.key === 'ArrowLeft') this.seek(this.currentTime - (e.shiftKey ? 5 : 1));
     });
@@ -130,6 +142,23 @@ export class GlipPlayerElement extends HTMLElement {
 
   get currentTime() { return this._player ? this._player.time() : this._data?.clip.in || 0; }
   get paused() { return this._player ? this._player.paused() : true; }
+  get muted() { return this._player ? this._player.isMuted() : this.hasAttribute('muted'); }
+
+  setMuted(m) {
+    if (this._player) {
+      this._player.setMuted(m);
+      this._updateVolUi(m);
+    }
+  }
+  toggleMute() { this.setMuted(!this.muted); }
+
+  _updateVolUi(muted) {
+    const btn = this._$('.vol');
+    if (btn) {
+      btn.innerHTML = muted ? ICON_MUTE : ICON_VOL;
+      btn.setAttribute('aria-label', muted ? 'Activar sonido' : 'Silenciar');
+    }
+  }
 
   play() {
     const p = this._player, c = this._data?.clip;
@@ -216,6 +245,7 @@ export class GlipPlayerElement extends HTMLElement {
       this._player = player;
       if (this.hasAttribute('muted')) player.setMuted(true);
       if (this.hasAttribute('autoplay')) { if (!this.hasAttribute('muted')) player.setMuted(true); player.play(); }
+      this._updateVolUi(player.isMuted());
       this._renderCues();
       this._loop();
       this._resolveReady(a);

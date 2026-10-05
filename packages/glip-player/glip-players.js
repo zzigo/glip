@@ -16,7 +16,7 @@ export const VIMEO_API_URL = 'https://player.vimeo.com/api/player.js';
  *   kind: 'youtube' | 'vimeo' | 'file',
  *   play(): void, pause(): void, toggle(): void, seek(t: number): void,
  *   time(): number, duration(): number, paused(): boolean,
- *   aspect(): number | null, setMuted(m: boolean): void, destroy(): void
+ *   aspect(): number | null, setMuted(m: boolean): void, isMuted(): boolean, destroy(): void
  * }} MediaPlayer
  */
 
@@ -113,6 +113,7 @@ async function youtube(host, source, { start = 0, onstate } = {}) {
             paused: () => !(state === 1 || state === 3),
             aspect: () => null,
             setMuted: (m) => (m ? p.mute() : p.unMute()),
+            isMuted: () => Boolean(p.isMuted?.()),
             destroy: () => { try { p.destroy(); } catch {} mount.remove(); },
           };
           resolve(api);
@@ -160,6 +161,7 @@ async function vimeo(host, source, { start = 0, onstate } = {}) {
   p.on('ended', () => { playing = false; onstate?.(false); });
   if (start > 0) { try { await p.setCurrentTime(start); } catch {} }
   clock.set(start);
+  let muted = false;
   return {
     kind: 'vimeo',
     play: () => { p.play().catch(() => {}); },
@@ -170,7 +172,8 @@ async function vimeo(host, source, { start = 0, onstate } = {}) {
     duration: () => duration,
     paused: () => !playing,
     aspect: () => aspect,
-    setMuted: (m) => { p.setMuted(m).catch(() => {}); },
+    setMuted: (m) => { muted = m; p.setMuted(m).catch(() => {}); },
+    isMuted: () => muted,
     destroy: () => { try { p.destroy(); } catch {} mount.remove(); },
   };
 }
@@ -203,6 +206,7 @@ async function file(host, source, { start = 0, onstate } = {}) {
     paused: () => v.paused,
     aspect: () => (v.videoWidth && v.videoHeight ? v.videoWidth / v.videoHeight : null),
     setMuted: (m) => { v.muted = m; },
+    isMuted: () => v.muted,
     destroy: () => { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); },
   };
 }
