@@ -352,11 +352,12 @@ export function summarize(a) {
     year: a.year,
     tags: a.tags,
     performer: a.performer,
-    provider: a.source.provider,
-    url: a.source.url,
+    notes: a.notes,
+    provider: a.source?.provider,
+    url: a.source?.url,
     thumbnail: thumbnailUrl(a.source),
     clip: a.clip,
-    shapeCount: a.shapes.length,
+    shapeCount: a.shapes?.length || 0,
     updated: a.updated,
   };
 }

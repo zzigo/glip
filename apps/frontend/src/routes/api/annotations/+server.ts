@@ -35,9 +35,12 @@ export const GET: RequestHandler = async ({ url }) => {
 	if (q) {
 		summaries = summaries.filter(
 			(s) =>
+				s.id?.toLowerCase().includes(q) ||
 				s.title?.toLowerCase().includes(q) ||
 				s.work?.toLowerCase().includes(q) ||
 				s.composer?.toLowerCase().includes(q) ||
+				s.performer?.toLowerCase().includes(q) ||
+				s.notes?.toLowerCase().includes(q) ||
 				s.tags?.some((t) => t.toLowerCase().includes(q))
 		);
 	}
